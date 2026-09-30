@@ -30,28 +30,54 @@ type Node struct {
 	Type    string   `json:"type"` // dialogue | choice | end
 	Speaker string   `json:"speaker,omitempty"`
 	Text    string   `json:"text"`
-	Choices  []Choice `json:"choices,omitempty"`
+	Choices []Choice `json:"choices,omitempty"`
 }
 
 type Definition struct {
 	ID      string          `json:"id"`
-	Title  string          `json:"title"`
+	Title   string          `json:"title"`
 	Version string          `json:"version"`
 	Start   string          `json:"start"`
 	Nodes   map[string]Node `json:"nodes"`
 }
 
 type Instance struct {
-	ID         string                 `json:"id"`
-	StoryID    string                 `json:"storyId"`
-	Version    string                 `json:"version"`
-	DefHash    string                 `json:"defHash"`
-	Current    string                 `json:"current"`
-	Facts      map[string]interface{} `json:"facts"`
-	Claimed    []string               `json:"claimedRewards"`
-	Log        []LogEntry             `json:"log"`
-	CreatedAt  string                 `json:"createdAt"`
-	UpdatedAt  string                 `json:"updatedAt"`
+	ID        string                 `json:"id"`
+	StoryID   string                 `json:"storyId"`
+	Version   string                 `json:"version"`
+	DefHash   string                 `json:"defHash"`
+	Current   string                 `json:"current"`
+	VisitID   string                 `json:"visitId"`
+	Rev       int                    `json:"rev"`
+	Facts     map[string]interface{} `json:"facts"`
+	Claimed   []string               `json:"claimedRewards"`
+	Rewards   []Reward               `json:"rewards,omitempty"`
+	Decisions map[string]IdemRecord  `json:"decisions,omitempty"`
+	Branches  map[string]BranchInfo  `json:"branches,omitempty"`
+	Log       []LogEntry             `json:"log"`
+	ParentID  string                 `json:"parentId,omitempty"`
+	RootID    string                 `json:"rootId,omitempty"`
+	Label     string                 `json:"label,omitempty"`
+	CreatedAt string                 `json:"createdAt"`
+	UpdatedAt string                 `json:"updatedAt"`
+}
+
+// BranchInfo records a rehearsal branch created from a parent instance.
+type BranchInfo struct {
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	Node      string `json:"node"`
+	CreatedAt string `json:"createdAt"`
+}
+
+// IdemRecord caches a choice submission so a retried HTTP request with the
+// same idempotency key returns the original result without re-granting.
+type IdemRecord struct {
+	VisitID  string   `json:"visitId"`
+	ChoiceID string   `json:"choiceId"`
+	FromNode string   `json:"fromNode"`
+	Rewards  []Reward `json:"rewards"`
+	At       string   `json:"at"`
 }
 
 type LogEntry struct {
@@ -71,7 +97,7 @@ type NodeView struct {
 }
 
 type ValidationReport struct {
-	Valid   bool     `json:"valid"`
-	Errors  []string `json:"errors"`
+	Valid    bool     `json:"valid"`
+	Errors   []string `json:"errors"`
 	Warnings []string `json:"warnings"`
 }

@@ -1,9 +1,9 @@
 package story
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 )
 
 var validOps = map[string]bool{
@@ -364,17 +364,17 @@ func ConditionSatisfiable(c *Condition) (bool, error) {
 }
 
 func condKey(c *Condition) string {
-	b, _ := jsonMarshal(c)
+	b, _ := json.Marshal(c)
 	return string(b)
 }
 
 // ChoiceMutexReport lists pairs of choices on the same node whose conditions
 // can be simultaneously satisfied.
 type ChoiceMutexReport struct {
-	Node       string   `json:"node"`
-	ChoiceA    string   `json:"choiceA"`
-	ChoiceB    string   `json:"choiceB"`
-	Message    string   `json:"message"`
+	Node    string `json:"node"`
+	ChoiceA string `json:"choiceA"`
+	ChoiceB string `json:"choiceB"`
+	Message string `json:"message"`
 }
 
 // CheckChoiceMutex returns overlapping conditional choice pairs.
@@ -409,7 +409,6 @@ func CheckChoiceMutex(def *Definition) []ChoiceMutexReport {
 			}
 		}
 	}
-	_ = strings.TrimSpace
 	_ = condKey
 	return reports
 }
