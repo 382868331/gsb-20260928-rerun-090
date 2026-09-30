@@ -30,34 +30,45 @@ type Node struct {
 	Type    string   `json:"type"` // dialogue | choice | end
 	Speaker string   `json:"speaker,omitempty"`
 	Text    string   `json:"text"`
-	Choices  []Choice `json:"choices,omitempty"`
+	Choices []Choice `json:"choices,omitempty"`
 }
 
 type Definition struct {
 	ID      string          `json:"id"`
-	Title  string          `json:"title"`
+	Title   string          `json:"title"`
 	Version string          `json:"version"`
 	Start   string          `json:"start"`
 	Nodes   map[string]Node `json:"nodes"`
 }
 
 type Instance struct {
-	ID         string                 `json:"id"`
-	StoryID    string                 `json:"storyId"`
-	Version    string                 `json:"version"`
-	DefHash    string                 `json:"defHash"`
-	Current    string                 `json:"current"`
-	Facts      map[string]interface{} `json:"facts"`
-	Claimed    []string               `json:"claimedRewards"`
-	Log        []LogEntry             `json:"log"`
-	CreatedAt  string                 `json:"createdAt"`
-	UpdatedAt  string                 `json:"updatedAt"`
+	ID       string                 `json:"id"`
+	Name     string                 `json:"name,omitempty"`
+	StoryID  string                 `json:"storyId"`
+	Version  string                 `json:"version"`
+	DefHash  string                 `json:"defHash"`
+	ParentID string                 `json:"parentId,omitempty"`
+	Current  string                 `json:"current"`
+	Facts    map[string]interface{} `json:"facts"`
+	Claimed  []string               `json:"claimedRewards,omitempty"`
+	// RequestIDs maps a client-supplied idempotency key to the choice it applied.
+	RequestIDs map[string]RequestRecord `json:"requestIds,omitempty"`
+	Log        []LogEntry               `json:"log,omitempty"`
+	CreatedAt  string                   `json:"createdAt"`
+	UpdatedAt  string                   `json:"updatedAt"`
 }
 
 type LogEntry struct {
 	Node     string `json:"node"`
 	ChoiceID string `json:"choiceId,omitempty"`
 	At       string `json:"at"`
+}
+
+// RequestRecord remembers where an idempotency key was consumed so a replay
+// cannot advance the story a second time.
+type RequestRecord struct {
+	Node   string `json:"node"`
+	Choice string `json:"choice"`
 }
 
 type AvailableChoice struct {
@@ -71,7 +82,7 @@ type NodeView struct {
 }
 
 type ValidationReport struct {
-	Valid   bool     `json:"valid"`
-	Errors  []string `json:"errors"`
+	Valid    bool     `json:"valid"`
+	Errors   []string `json:"errors"`
 	Warnings []string `json:"warnings"`
 }
