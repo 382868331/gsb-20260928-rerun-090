@@ -84,7 +84,7 @@ func (s *FileStore) List() ([]*Instance, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []*Instance
+	out := make([]*Instance, 0, len(entries))
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue

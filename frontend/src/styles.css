@@ -107,3 +107,24 @@ code { background: #0f1320; padding: 1px 6px; border-radius: 4px; }
 .banner { padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 14px; }
 .banner-error { background: #43212a; border: 1px solid #7a2f3e; color: #ffb3c0; }
 .banner-notice { background: #213043; border: 1px solid #2f507a; color: #b3d0ff; }
+.banner-error button { margin-left: 10px; }
+
+.log-steps { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; }
+.log-steps li { font-size: 13px; }
+.log-node { display: flex; gap: 8px; align-items: baseline; }
+.log-node-text { color: #c7d2ea; }
+.log-choice { color: #8fb3ff; }
+.log-reward { color: #9fd8a8; }
+
+.compare { margin-top: 20px; }
+.compare-head { display: flex; align-items: center; gap: 14px; }
+.compare-head h2 { margin-right: auto; }
+.compare-head label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #9fb0d0; }
+.compare-shared {
+  border: 1px dashed #3a4665; border-radius: 8px;
+  padding: 10px 14px; margin: 12px 0;
+  opacity: 0.85;
+}
+.compare-shared h3, .compare-col h3 { margin: 0 0 8px; font-size: 14px; color: #9fb0d0; }
+.compare-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.compare-col { border: 1px solid #2a3350; border-radius: 8px; padding: 10px 14px; }

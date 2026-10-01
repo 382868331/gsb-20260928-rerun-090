@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import type { AppliedResponse, Instance, NodeView } from "./types";
+import type { AppliedResponse, Instance, NodeView, StoryDefinition } from "./types";
 import {
   ApiError,
   createInstance,
   forkInstance,
   getInstance,
+  getStory,
   listInstances,
   newIdempotencyKey,
   submitChoice,
@@ -13,6 +14,8 @@ import { FactsPanel } from "./components/FactsPanel";
 import { NodePanel } from "./components/NodePanel";
 import { BranchList } from "./components/BranchList";
 import { RewardLog } from "./components/RewardLog";
+import { StoryLog } from "./components/StoryLog";
+import { ComparePanel } from "./components/ComparePanel";
 
 export function App() {
   const [instances, setInstances] = useState<Instance[]>([]);
@@ -22,10 +25,20 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [stories, setStories] = useState<Record<string, StoryDefinition>>({});
+  const [compareId, setCompareId] = useState<string | null>(null);
 
   const refreshList = useCallback(async () => {
-    const { instances } = await listInstances();
-    setInstances(instances);
+    try {
+      const { instances } = await listInstances();
+      // An empty archive is a valid state, never an error; older backends may
+      // still send null, so normalise before anything iterates the list.
+      setInstances(Array.isArray(instances) ? instances : []);
+      setListError(null);
+    } catch (e) {
+      setListError(e instanceof Error ? e.message : String(e));
+    }
   }, []);
 
   const loadInstance = useCallback(async (id: string) => {
@@ -37,8 +50,17 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    refreshList().catch(() => undefined);
+    refreshList();
   }, [refreshList]);
+
+  useEffect(() => {
+    if (!instance) return;
+    const storyId = instance.storyId;
+    if (stories[storyId]) return;
+    getStory(storyId)
+      .then((def) => setStories((prev) => ({ ...prev, [storyId]: def })))
+      .catch(() => undefined);
+  }, [instance, stories]);
 
   useEffect(() => {
     if (currentId) {
@@ -51,7 +73,7 @@ export function App() {
   const applyResponse = useCallback((res: AppliedResponse | { instance: Instance; view: NodeView }) => {
     setInstance(res.instance);
     setView(res.view);
-    refreshList().catch(() => undefined);
+    refreshList();
   }, [refreshList]);
 
   const handleStart = async () => {
@@ -113,6 +135,12 @@ export function App() {
     }
   };
 
+  const rootOf = (i: Instance) => i.rootId || i.id;
+  const siblings = instance
+    ? instances.filter((i) => i.id !== instance.id && rootOf(i) === rootOf(instance))
+    : [];
+  const compareOpen = compareId !== null && siblings.length > 0;
+
   return (
     <div className="app">
       <header className="topbar">
@@ -124,10 +152,23 @@ export function App() {
           <button onClick={handleFork} disabled={busy || !instance} title="在本次选择之前建立独立试演分支">
             建立试演分支
           </button>
+          <button
+            onClick={() => setCompareId(compareOpen ? null : siblings[0]?.id ?? null)}
+            disabled={!instance || siblings.length === 0}
+            title="对比同一选择点分出的不同剧情分支"
+          >
+            比较分支
+          </button>
         </div>
       </header>
       <main className="layout">
         <aside className="sidebar">
+          {listError && (
+            <div className="banner banner-error" role="alert">
+              存档列表读取失败：{listError}
+              <button onClick={refreshList}>重试</button>
+            </div>
+          )}
           <BranchList
             instances={instances}
             currentId={currentId}
@@ -145,7 +186,18 @@ export function App() {
               <div className="panels">
                 <FactsPanel instance={instance} />
                 <RewardLog instance={instance} />
+                <StoryLog instance={instance} def={stories[instance.storyId]} />
               </div>
+              {compareOpen && (
+                <ComparePanel
+                  base={instance}
+                  others={siblings}
+                  compareId={compareId}
+                  defs={stories}
+                  onSelect={setCompareId}
+                  onClose={() => setCompareId(null)}
+                />
+              )}
             </>
           )}
         </section>

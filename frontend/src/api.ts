@@ -1,4 +1,4 @@
-import type { AppliedResponse, InstanceResponse } from "./types";
+import type { AppliedResponse, InstanceResponse, StoryDefinition } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -39,6 +39,10 @@ export function getInstance(id: string): Promise<InstanceResponse> {
 
 export function listInstances(): Promise<{ instances: import("./types").Instance[] }> {
   return request("/api/instances");
+}
+
+export function getStory(id: string): Promise<StoryDefinition> {
+  return request(`/api/stories/${encodeURIComponent(id)}`);
 }
 
 let keyCounter = 0;

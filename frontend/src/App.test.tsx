@@ -113,6 +113,15 @@ function handle(input: string | URL | Request, init?: RequestInit): Response {
   if (url === "/api/instances" && method === "GET") {
     return jsonResponse({ instances: Object.values(state.instances) });
   }
+  if (parts[2] === "stories" && parts.length === 4 && method === "GET") {
+    return jsonResponse({
+      id: "t",
+      title: "测试剧情",
+      version: "v1",
+      start: "square",
+      nodes: mockStory.nodes,
+    });
+  }
   if (url === "/api/instances" && method === "POST") {
     idCounter += 1;
     const id = body.id || "inst-" + idCounter;
@@ -245,5 +254,62 @@ describe("story play UI", () => {
       expect(within(facts).getByText("5")).toBeTruthy();
     });
     expect(screen.getByText("领工钱")).toBeTruthy();
+  });
+
+  it("renders the empty archive list as a normal state, not a crash", async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("还没有存档。")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "开始新故事" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "开始新故事" }));
+    await waitFor(() => expect(screen.getByText("去干活")).toBeTruthy());
+  });
+
+  it("keeps a retry entry when the archive list genuinely fails to load", async () => {
+    let failList = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: unknown, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (failList && url === "/api/instances" && method === "GET") {
+          return Promise.resolve(jsonResponse({ error: "boom" }, 500));
+        }
+        return Promise.resolve(handle(input as string, init));
+      }) as unknown as typeof fetch,
+    );
+    render(<App />);
+    await waitFor(() => expect(screen.getByText(/存档列表读取失败/)).toBeTruthy());
+    failList = false;
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(screen.getByText("还没有存档。")).toBeTruthy());
+    expect(screen.queryByText(/存档列表读取失败/)).toBeNull();
+  });
+
+  it("compares branches from one choice point with a read-only shared prefix", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "开始新故事" }));
+    await waitFor(() => expect(screen.getByText("去干活")).toBeTruthy());
+    fireEvent.click(screen.getByText("去干活"));
+    await waitFor(() => expect(screen.getByText("领工钱")).toBeTruthy());
+
+    vi.spyOn(window, "prompt").mockReturnValue("试演：对比");
+    fireEvent.click(screen.getByRole("button", { name: "建立试演分支" }));
+    await waitFor(() => expect(screen.getAllByText(/试演：对比/).length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByText("领工钱"));
+    await waitFor(() =>
+      expect(within(document.querySelector(".facts") as HTMLElement).getByText("13")).toBeTruthy(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "比较分支" }));
+    await waitFor(() => expect(screen.getByText("共同前缀（只读）")).toBeTruthy());
+    const shared = document.querySelector(".compare-shared") as HTMLElement;
+    expect(within(shared).getByText(/去干活/)).toBeTruthy();
+    expect(shared.textContent).not.toContain("领工钱");
+    const cols = document.querySelectorAll(".compare-col");
+    expect(cols.length).toBe(2);
+    expect(within(cols[0] as HTMLElement).getByText(/试演：对比/)).toBeTruthy();
+    expect(within(cols[0] as HTMLElement).getByText(/领工钱/)).toBeTruthy();
+    expect((cols[1] as HTMLElement).textContent).not.toContain("领工钱");
   });
 });

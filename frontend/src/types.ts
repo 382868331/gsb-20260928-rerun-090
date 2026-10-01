@@ -37,6 +37,14 @@ export interface NodeView {
   availableChoices: AvailableChoice[];
 }
 
+export interface StoryDefinition {
+  id: string;
+  title: string;
+  version: string;
+  start: string;
+  nodes: Record<string, StoryNode>;
+}
+
 export interface Reward {
   node: string;
   choiceId: string;

@@ -67,6 +67,37 @@ func choiceIDs(body map[string]interface{}) []string {
 	return ids
 }
 
+func TestListInstancesEmptyMemoryStore(t *testing.T) {
+	h, _, _ := newTestServer(t)
+	code, body := getJSON(t, h, "/api/instances")
+	if code != http.StatusOK {
+		t.Fatalf("list instances: got %d", code)
+	}
+	if _, ok := body["instances"].([]interface{}); !ok {
+		t.Fatalf("empty store must return an empty JSON array, got %#v", body["instances"])
+	}
+}
+
+func TestListInstancesEmptyFileStore(t *testing.T) {
+	catalog := story.NewCatalog(seed.Story())
+	store, err := story.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandler(catalog, store, seed.InitialFacts())
+	mux := http.NewServeMux()
+	h.Register(mux)
+	req := httptest.NewRequest(http.MethodGet, "/api/instances", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d", w.Code)
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"instances":[]`)) {
+		t.Fatalf("empty file store must serialise as [], got %s", w.Body.String())
+	}
+}
+
 func TestFullPlayHTTP(t *testing.T) {
 	h, _, _ := newTestServer(t)
 
