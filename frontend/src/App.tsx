@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import type { AppliedResponse, Instance, NodeView } from "./types";
+import type { AppliedResponse, BranchComparison, Instance, NodeView, TraceStep } from "./types";
 import {
   ApiError,
+  compareBranches,
   createInstance,
   forkInstance,
   getInstance,
@@ -13,6 +14,8 @@ import { FactsPanel } from "./components/FactsPanel";
 import { NodePanel } from "./components/NodePanel";
 import { BranchList } from "./components/BranchList";
 import { RewardLog } from "./components/RewardLog";
+import { HistoryPanel } from "./components/HistoryPanel";
+import { BranchCompare } from "./components/BranchCompare";
 
 export function App() {
   const [instances, setInstances] = useState<Instance[]>([]);
@@ -22,22 +25,34 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [trace, setTrace] = useState<TraceStep[]>([]);
+  const [comparison, setComparison] = useState<BranchComparison | null>(null);
+  const [pendingCompareId, setPendingCompareId] = useState<string | null>(null);
 
   const refreshList = useCallback(async () => {
-    const { instances } = await listInstances();
-    setInstances(instances);
+    const res = await listInstances();
+    // A genuinely empty archive (fresh data) is normal state, never an
+    // exception: normalise null/missing arrays to [] so the UI renders the
+    // empty state instead of crashing.
+    setInstances(Array.isArray(res.instances) ? res.instances : []);
+    setListError(null);
   }, []);
 
   const loadInstance = useCallback(async (id: string) => {
     const res = await getInstance(id);
     setInstance(res.instance);
     setView(res.view);
+    setTrace(Array.isArray(res.trace) ? res.trace : []);
     setCurrentId(id);
     setError(null);
   }, []);
 
   useEffect(() => {
-    refreshList().catch(() => undefined);
+    refreshList().catch((e: unknown) => {
+      // Only a real read failure surfaces; keep the retry entry available.
+      setListError(e instanceof Error ? e.message : String(e));
+    });
   }, [refreshList]);
 
   useEffect(() => {
@@ -51,6 +66,7 @@ export function App() {
   const applyResponse = useCallback((res: AppliedResponse | { instance: Instance; view: NodeView }) => {
     setInstance(res.instance);
     setView(res.view);
+    if ("trace" in res && Array.isArray(res.trace)) setTrace(res.trace);
     refreshList().catch(() => undefined);
   }, [refreshList]);
 
@@ -113,6 +129,26 @@ export function App() {
     }
   };
 
+  const handleCompare = async (id: string) => {
+    if (pendingCompareId === id) {
+      setPendingCompareId(null);
+      return;
+    }
+    if (!pendingCompareId) {
+      setPendingCompareId(id);
+      return;
+    }
+    setError(null);
+    try {
+      const report = await compareBranches(pendingCompareId, id);
+      setComparison(report);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPendingCompareId(null);
+    }
+  };
+
   return (
     <div className="app">
       <header className="topbar">
@@ -132,16 +168,35 @@ export function App() {
             instances={instances}
             currentId={currentId}
             onSelect={setCurrentId}
+            onCompare={handleCompare}
+            pendingCompareId={pendingCompareId}
+            listError={listError}
+            onRetryList={() => {
+              refreshList().catch((e: unknown) => {
+                setListError(e instanceof Error ? e.message : String(e));
+              });
+            }}
           />
         </aside>
         <section className="stage">
           {error && <div className="banner banner-error" role="alert">{error}</div>}
           {notice && <div className="banner banner-notice">{notice}</div>}
+          {comparison && (
+            <BranchCompare
+              report={comparison}
+              onClose={() => setComparison(null)}
+              onOpen={(id) => {
+                setComparison(null);
+                setCurrentId(id);
+              }}
+            />
+          )}
           {!instance ? (
-            <div className="empty">点击“开始新故事”进入《雾港抉择》。</div>
+            <div className="empty">{listError ? "存档读取失败，可重试或直接开始新故事。" : "点击“开始新故事”进入《雾港抉择》。"}</div>
           ) : (
             <>
               <NodePanel view={view} busy={busy} onChoose={handleChoose} />
+              <HistoryPanel trace={trace} />
               <div className="panels">
                 <FactsPanel instance={instance} />
                 <RewardLog instance={instance} />

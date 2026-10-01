@@ -84,6 +84,49 @@ type LogEntry struct {
 	Node     string `json:"node"`
 	ChoiceID string `json:"choiceId,omitempty"`
 	At       string `json:"at"`
+	// FromNode, ChoiceText and reward snapshot make the record self
+	// explaining after restarts and version changes. Older saves simply
+	// leave these empty and Trace rebuilds them from the pinned definition.
+	FromNode   string   `json:"fromNode,omitempty"`
+	ChoiceText string   `json:"choiceText,omitempty"`
+	Effects    []Effect `json:"effects,omitempty"`
+}
+
+// TraceStep is one explainable step of a play-through: arriving at a node
+// and, when applicable, the choice that led there with the condition that
+// was confirmed server-side and the rewards it granted.
+type TraceStep struct {
+	Seq        int        `json:"seq"`
+	Node       string     `json:"node"`
+	NodeText   string     `json:"nodeText"`
+	Speaker    string     `json:"speaker,omitempty"`
+	At         string     `json:"at"`
+	FromNode   string     `json:"fromNode,omitempty"`
+	ChoiceID   string     `json:"choiceId,omitempty"`
+	ChoiceText string     `json:"choiceText,omitempty"`
+	Condition  *Condition `json:"condition,omitempty"`
+	Effects    []Effect   `json:"effects,omitempty"`
+	Rewards    []Reward   `json:"rewards,omitempty"`
+	End        bool       `json:"end,omitempty"`
+}
+
+// BranchComparison explains how two play-throughs diverged. Prefix steps are
+// shared history and must be treated as read-only; each side keeps its own
+// conditions, rewards and later progress.
+type BranchComparison struct {
+	BaseID       string                 `json:"baseId"`
+	OtherID      string                 `json:"otherId"`
+	ForkNode     string                 `json:"forkNode"`
+	ForkLabel    string                 `json:"forkLabel,omitempty"`
+	Prefix       []TraceStep            `json:"prefix"`
+	BaseSteps    []TraceStep            `json:"baseSteps"`
+	OtherSteps   []TraceStep            `json:"otherSteps"`
+	BaseFacts    map[string]interface{} `json:"baseFacts"`
+	OtherFacts   map[string]interface{} `json:"otherFacts"`
+	BaseRewards  []Reward               `json:"baseRewards"`
+	OtherRewards []Reward               `json:"otherRewards"`
+	BaseCurrent  string                 `json:"baseCurrent"`
+	OtherCurrent string                 `json:"otherCurrent"`
 }
 
 type AvailableChoice struct {

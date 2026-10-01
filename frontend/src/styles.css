@@ -107,3 +107,22 @@ code { background: #0f1320; padding: 1px 6px; border-radius: 4px; }
 .banner { padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 14px; }
 .banner-error { background: #43212a; border: 1px solid #7a2f3e; color: #ffb3c0; }
 .banner-notice { background: #213043; border: 1px solid #2f507a; color: #b3d0ff; }
+.retry { margin-left: 10px; }
+.branch-row { display: flex; align-items: center; gap: 4px; }
+.branch-row .branch-item { flex: 1; }
+.compare-btn { flex: none; padding: 4px 8px; font-size: 11px; background: #263047; border: 1px solid #3a4665; color: #b3c6ea; border-radius: 6px; cursor: pointer; }
+
+.history .trace { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 10px; }
+.trace-head { display: flex; gap: 10px; align-items: center; color: #9fb0d0; font-size: 12px; }
+.trace-choice { color: #cfe0ff; margin: 4px 0; }
+.trace-condition { color: #8fb38f; font-size: 12px; }
+.trace-rewards { margin: 4px 0 0; padding-left: 18px; color: #e3c98f; font-size: 12px; }
+
+.compare-head { display: flex; justify-content: space-between; align-items: center; }
+.compare-prefix { border-left: 3px solid #4a5f8f; padding-left: 10px; margin: 10px 0; }
+.compare-prefix-steps { margin: 0; padding-left: 18px; color: #7d8bab; }
+.readonly-step { opacity: 0.85; }
+.compare-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.compare-column { border: 1px solid #3a4665; border-radius: 8px; padding: 10px; }
+.compare-steps { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.compare-actions { display: flex; gap: 10px; margin-top: 12px; }

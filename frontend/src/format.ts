@@ -1,4 +1,4 @@
-import type { Instance, Reward } from "./types";
+import type { Condition, Effect, Instance, Reward } from "./types";
 
 export function factsEntries(inst: Instance): [string, string][] {
   const out: [string, string][] = [];
@@ -34,5 +34,31 @@ export function describeReward(reward: Reward): string {
       return "标记：" + reward.key;
     default:
       return reward.key + " = " + String(reward.value);
+  }
+}
+
+export function describeEffect(eff: Effect): string {
+  switch (eff.op) {
+    case "inc":
+      return eff.key + " " + (Number(eff.value) >= 0 ? "+" : "") + String(eff.value);
+    case "item":
+      return "获得道具：" + eff.key;
+    case "flag":
+      return "标记：" + eff.key;
+    default:
+      return eff.key + " = " + String(eff.value);
+  }
+}
+
+export function describeCondition(cond: Condition): string {
+  if (cond.all) return cond.all.map(describeCondition).join(" 且 ");
+  if (cond.any) return cond.any.map(describeCondition).join(" 或 ");
+  const fact = cond.fact ?? "";
+  switch (cond.op) {
+    case "exists": return `${fact} 已存在`;
+    case "missing": return `${fact} 尚未获得`;
+    case "==": return `${fact} == ${String(cond.value)}`;
+    case "!=": return `${fact} != ${String(cond.value)}`;
+    default: return `${fact} ${cond.op} ${String(cond.value)}`;
   }
 }

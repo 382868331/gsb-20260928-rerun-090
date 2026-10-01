@@ -1,4 +1,4 @@
-import type { AppliedResponse, InstanceResponse } from "./types";
+import type { AppliedResponse, BranchComparison, Instance, InstanceResponse } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -40,6 +40,12 @@ export function getInstance(id: string): Promise<InstanceResponse> {
 export function listInstances(): Promise<{ instances: import("./types").Instance[] }> {
   return request("/api/instances");
 }
+
+export function compareBranches(baseId: string, otherId: string): Promise<BranchComparison> {
+  return request(`/api/instances/${encodeURIComponent(baseId)}/compare/${encodeURIComponent(otherId)}`);
+}
+
+export { type Instance };
 
 let keyCounter = 0;
 

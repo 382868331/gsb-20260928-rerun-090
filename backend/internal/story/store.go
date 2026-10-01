@@ -84,7 +84,10 @@ func (s *FileStore) List() ([]*Instance, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []*Instance
+	// A fresh install has no saves: return a non-nil empty slice so the HTTP
+	// layer encodes [] rather than null. An empty archive is normal state,
+	// not an error; only real read failures propagate.
+	out := make([]*Instance, 0, len(entries))
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue

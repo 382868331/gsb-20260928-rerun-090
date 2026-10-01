@@ -32,12 +32,14 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/instances/{id}", h.getInstance)
 	mux.HandleFunc("POST /api/instances/{id}/choices", h.applyChoice)
 	mux.HandleFunc("POST /api/instances/{id}/forks", h.forkInstance)
+	mux.HandleFunc("GET /api/instances/{id}/compare/{otherId}", h.compareBranches)
 	mux.HandleFunc("GET /api/instances", h.listInstances)
 }
 
 type instanceResponse struct {
-	Instance *story.Instance `json:"instance"`
-	View     story.NodeView  `json:"view"`
+	Instance *story.Instance   `json:"instance"`
+	View     story.NodeView    `json:"view"`
+	Trace    []story.TraceStep `json:"trace"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -61,6 +63,8 @@ func writeError(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	case errors.Is(err, story.ErrStoryVersionDrift):
 		status = http.StatusConflict
+	case errors.Is(err, story.ErrBranchMismatch), errors.Is(err, story.ErrSameInstance):
+		status = http.StatusBadRequest
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
@@ -126,7 +130,7 @@ func (h *Handler) createInstance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, instanceResponse{Instance: inst, View: view})
+	writeJSON(w, http.StatusCreated, instanceResponse{Instance: inst, View: view, Trace: h.catalog.Trace(inst)})
 }
 
 func (h *Handler) listInstances(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +153,7 @@ func (h *Handler) getInstance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, instanceResponse{Instance: inst, View: view})
+	writeJSON(w, http.StatusOK, instanceResponse{Instance: inst, View: view, Trace: h.catalog.Trace(inst)})
 }
 
 type choiceRequest struct {
@@ -192,8 +196,9 @@ func (h *Handler) applyChoice(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	trace := h.catalog.Trace(inst)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"applied": applied, "instance": inst, "view": applied.View,
+		"applied": applied, "instance": inst, "view": applied.View, "trace": trace,
 	})
 }
 
@@ -205,13 +210,12 @@ type forkRequest struct {
 func (h *Handler) forkInstance(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	unlock := h.lockInstance(id)
+	defer unlock()
 	parent, err := h.store.Load(id)
 	if err != nil {
-		unlock()
 		writeError(w, err)
 		return
 	}
-	unlock()
 	var req forkRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -239,5 +243,24 @@ func (h *Handler) forkInstance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, instanceResponse{Instance: forked, View: view})
+	writeJSON(w, http.StatusCreated, instanceResponse{Instance: forked, View: view, Trace: h.catalog.Trace(forked)})
+}
+
+func (h *Handler) compareBranches(w http.ResponseWriter, r *http.Request) {
+	base, err := h.store.Load(r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	other, err := h.store.Load(r.PathValue("otherId"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	report, err := h.catalog.CompareBranches(base, other)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
 }

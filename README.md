@@ -51,6 +51,12 @@ npm run dev
 | GET | `/api/instances/{id}` | 继续：当前节点 + 允许的选项 |
 | POST | `/api/instances/{id}/choices` | 提交选择 `{choiceId, idempotencyKey}` |
 | POST | `/api/instances/{id}/forks` | 建立试演分支 `{label}` |
+| GET | `/api/instances/{id}/compare/{otherId}` | 比较同族分支：只读共同前缀 + 双方各自的分歧步骤、条件、奖励与事实 |
+
+空存档目录下列表接口返回 `{"instances":[]}`：空状态是正常数据，不是异常；只有真正的
+读取/解析失败才返回 5xx，页面保留重试入口。实例与选择响应额外携带 `trace`：按存档日志
+重建的逐步解释（到达节点、所选项、提交时服务端重新确认的条件、当步奖励），旧存档缺少
+富字段时按实例固定的剧情版本回填。fork 全程持有实例锁，与并发选择互不覆盖。
 
 ## 测试
 
@@ -61,4 +67,3 @@ cd frontend && npx vitest run    # 只渲染允许选项、重复提交被服务
 
 故事检查覆盖：重复选择不多拿、事实变化后条件重新确认、奖励后中断（含模拟
 进程重启）继续，且正确性来自服务端状态机而非前端按钮禁用。
-

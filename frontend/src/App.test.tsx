@@ -110,6 +110,42 @@ function handle(input: string | URL | Request, init?: RequestInit): Response {
   const body = init?.body ? JSON.parse(String(init.body)) : {};
   const parts = url.split("/");
 
+  if (parts[4] === "compare" && method === "GET") {
+    const a = state.instances[parts[3]];
+    const b = state.instances[parts[5]];
+    if (!a || !b) return jsonResponse({ error: "unknown" }, 404);
+    const ra = a.rootId || a.id;
+    const rb = b.rootId || b.id;
+    if (ra !== rb || a.defHash !== b.defHash) return jsonResponse({ error: "mismatch" }, 400);
+    if (a.id === b.id) return jsonResponse({ error: "same" }, 400);
+    const toStep = (entry: { node: string; choiceId?: string }, seq: number) => ({
+      seq,
+      node: entry.node,
+      nodeText: entry.node,
+      at: "t",
+      choiceId: entry.choiceId,
+      choiceText: entry.choiceId ? `选择${entry.choiceId}` : undefined,
+      effects: entry.choiceId ? [{ op: "inc", key: "gold", value: 1 }] : undefined,
+    });
+    let k = 0;
+    while (k < a.log.length && k < b.log.length && a.log[k].node === b.log[k].node && a.log[k].choiceId === b.log[k].choiceId) k++;
+    return jsonResponse({
+      baseId: a.id,
+      otherId: b.id,
+      forkNode: k > 0 ? a.log[k - 1].node : a.current,
+      forkLabel: b.label,
+      prefix: a.log.slice(0, k).map((e, i) => toStep(e, i + 1)),
+      baseSteps: a.log.slice(k).map((e, i) => toStep(e, k + i + 1)),
+      otherSteps: b.log.slice(k).map((e, i) => toStep(e, k + i + 1)),
+      baseFacts: a.facts,
+      otherFacts: b.facts,
+      baseRewards: a.rewards,
+      otherRewards: b.rewards,
+      baseCurrent: a.current,
+      otherCurrent: b.current,
+    });
+  }
+
   if (url === "/api/instances" && method === "GET") {
     return jsonResponse({ instances: Object.values(state.instances) });
   }
@@ -190,6 +226,32 @@ beforeEach(() => {
 });
 
 describe("story play UI", () => {
+  it("treats an empty archive as a normal empty state, not an error", async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("还没有存档。")).toBeTruthy());
+    expect(screen.getByText(/点击“开始新故事”/)).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps a retry entry when the archive list really fails", async () => {
+    const original = vi.mocked(globalThis.fetch);
+    globalThis.fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "/api/instances" && (init?.method ?? "GET") === "GET") {
+        return Promise.resolve(jsonResponse({ error: "disk unavailable" }, 500));
+      }
+      return Promise.resolve(handle(input, init));
+    }) as unknown as typeof fetch;
+    try {
+      render(<App />);
+      await waitFor(() => expect(screen.getByText(/存档列表读取失败/)).toBeTruthy());
+      fireEvent.click(screen.getByRole("button", { name: "重试" }));
+      await waitFor(() => expect(screen.getByText("还没有存档。")).toBeTruthy());
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
   it("renders only currently allowed choices and unlocks after facts change", async () => {
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "开始新故事" }));
@@ -245,5 +307,42 @@ describe("story play UI", () => {
       expect(within(facts).getByText("5")).toBeTruthy();
     });
     expect(screen.getByText("领工钱")).toBeTruthy();
+  });
+
+  it("compares two branches from their divergence point and keeps each side's state", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "开始新故事" }));
+    await waitFor(() => expect(screen.getByText("去干活")).toBeTruthy());
+    fireEvent.click(screen.getByText("去干活"));
+    await waitFor(() => expect(screen.getByText("领工钱")).toBeTruthy());
+
+    vi.spyOn(window, "prompt").mockReturnValue("领工钱分支");
+    fireEvent.click(screen.getByRole("button", { name: "建立试演分支" }));
+    await waitFor(() => expect(screen.getAllByText(/领工钱分支/).length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByText("领工钱"));
+    await waitFor(() =>
+      expect(within(document.querySelector(".facts") as HTMLElement).getByText("13")).toBeTruthy(),
+    );
+
+    // Start comparison from the branch, then pick the root as the other side.
+    const compareButtons = screen.getAllByRole("button", { name: /比较/ });
+    fireEvent.click(compareButtons[compareButtons.length - 1]);
+    fireEvent.click(screen.getAllByRole("button", { name: /比较存档/ })[0]);
+
+    const panel = await screen.findByTestId("branch-compare");
+    expect(within(panel).getByText(/分叉于 lumberyard/)).toBeTruthy();
+    expect(panel.querySelectorAll(".readonly-step").length).toBe(2);
+    expect(within(panel).getByText(/该分支尚无独立进展/)).toBeTruthy();
+
+    // Jump back to the root and take the wage there: its own gold moves
+    // 5 -> 13, with no awareness of the branch's prior grant.
+    fireEvent.click(within(panel).getByRole("button", { name: "回到当前分支" }));
+    fireEvent.click(screen.getAllByText(/主线/)[0]);
+    await waitFor(() => expect(screen.getByText("领工钱")).toBeTruthy());
+    fireEvent.click(screen.getByText("领工钱"));
+    await waitFor(() =>
+      expect(within(document.querySelector(".facts") as HTMLElement).getByText("13")).toBeTruthy(),
+    );
+    expect(screen.getAllByText(/选择deliver_wood|领工钱/).length).toBeGreaterThan(0);
   });
 });

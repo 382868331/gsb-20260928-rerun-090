@@ -68,14 +68,55 @@ export interface Instance {
   parentId?: string;
   rootId?: string;
   label?: string;
-  log: { node: string; choiceId?: string; at: string }[];
+  log: LogEntry[];
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface LogEntry {
+  node: string;
+  choiceId?: string;
+  at: string;
+  fromNode?: string;
+  choiceText?: string;
+  effects?: Effect[];
+}
+
+export interface TraceStep {
+  seq: number;
+  node: string;
+  nodeText: string;
+  speaker?: string;
+  at: string;
+  fromNode?: string;
+  choiceId?: string;
+  choiceText?: string;
+  condition?: Condition;
+  effects?: Effect[];
+  rewards?: Reward[];
+  end?: boolean;
+}
+
+export interface BranchComparison {
+  baseId: string;
+  otherId: string;
+  forkNode: string;
+  forkLabel?: string;
+  prefix: TraceStep[];
+  baseSteps: TraceStep[];
+  otherSteps: TraceStep[];
+  baseFacts: Record<string, unknown>;
+  otherFacts: Record<string, unknown>;
+  baseRewards: Reward[];
+  otherRewards: Reward[];
+  baseCurrent: string;
+  otherCurrent: string;
 }
 
 export interface InstanceResponse {
   instance: Instance;
   view: NodeView;
+  trace?: TraceStep[];
 }
 
 export interface AppliedResponse extends InstanceResponse {

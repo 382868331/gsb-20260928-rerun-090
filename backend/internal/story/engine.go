@@ -293,7 +293,14 @@ func (c *Catalog) Apply(inst *Instance, choiceID, idemKey string) (*AppliedChoic
 	}
 	inst.VisitID = newVisitID()
 	inst.Rev++
-	inst.Log = append(inst.Log, LogEntry{Node: inst.Current, ChoiceID: choice.ID, At: now})
+	inst.Log = append(inst.Log, LogEntry{
+		Node:       inst.Current,
+		ChoiceID:   choice.ID,
+		At:         now,
+		FromNode:   node.ID,
+		ChoiceText: choice.Text,
+		Effects:    append([]Effect{}, choice.Effects...),
+	})
 	inst.UpdatedAt = now
 
 	view, err := viewFor(d, inst)
@@ -301,6 +308,147 @@ func (c *Catalog) Apply(inst *Instance, choiceID, idemKey string) (*AppliedChoic
 		return nil, err
 	}
 	return &AppliedChoice{ChoiceID: choice.ID, Node: node.ID, Rewards: rewards, View: view}, nil
+}
+
+// Trace rebuilds a step-by-step explanation of the play-through from its log.
+// Saves written before the enriched-log upgrade are reconstructed against the
+// pinned definition; if the pinned definition can no longer be resolved
+// (e.g. the story was edited) the log is still rendered as-is so the page
+// stays usable.
+func (c *Catalog) Trace(inst *Instance) []TraceStep {
+	steps, _ := c.trace(inst)
+	return steps
+}
+
+func (c *Catalog) trace(inst *Instance) ([]TraceStep, *Definition) {
+	d, err := c.pinnedDef(inst)
+	if err != nil {
+		d = nil
+	}
+	return BuildTrace(inst, d), d
+}
+
+// BuildTrace renders instance log entries against an optional definition.
+func BuildTrace(inst *Instance, d *Definition) []TraceStep {
+	steps := make([]TraceStep, 0, len(inst.Log))
+	rewardIdx := 0
+	for i, entry := range inst.Log {
+		step := TraceStep{
+			Seq:  i + 1,
+			Node: entry.Node,
+			At:   entry.At,
+		}
+		if d != nil {
+			if n, ok := d.Nodes[entry.Node]; ok {
+				step.NodeText = n.Text
+				step.Speaker = n.Speaker
+				step.End = n.Type == "end"
+			}
+		}
+		if entry.ChoiceID != "" {
+			step.FromNode = entry.FromNode
+			step.ChoiceID = entry.ChoiceID
+			step.ChoiceText = entry.ChoiceText
+			step.Effects = append([]Effect{}, entry.Effects...)
+			var ch *Choice
+			if d != nil && entry.FromNode != "" {
+				if n, ok := d.Nodes[entry.FromNode]; ok {
+					for j := range n.Choices {
+						if n.Choices[j].ID == entry.ChoiceID {
+							ch = &n.Choices[j]
+							break
+						}
+					}
+				}
+			}
+			if ch != nil {
+				if step.ChoiceText == "" {
+					step.ChoiceText = ch.Text
+				}
+				if len(step.Effects) == 0 {
+					step.Effects = append([]Effect{}, ch.Effects...)
+				}
+				step.Condition = ch.Condition
+			}
+			// Consume this transition's reward slice from the grant log.
+			for rewardIdx < len(inst.Rewards) {
+				r := inst.Rewards[rewardIdx]
+				matchNode := entry.FromNode
+				if matchNode == "" && i > 0 {
+					matchNode = inst.Log[i-1].Node
+				}
+				if r.ChoiceID != entry.ChoiceID || (matchNode != "" && r.Node != matchNode) {
+					break
+				}
+				step.Rewards = append(step.Rewards, r)
+				rewardIdx++
+			}
+		}
+		steps = append(steps, step)
+	}
+	return steps
+}
+
+var (
+	ErrBranchMismatch = fmt.Errorf("instances do not belong to the same branch family")
+	ErrSameInstance   = fmt.Errorf("cannot compare an instance with itself")
+)
+
+// CompareBranches returns the shared read-only prefix of two related
+// instances and each side's divergent suffix. Both instances must pin the
+// same story definition, otherwise their conditions could not be explained
+// side by side.
+func (c *Catalog) CompareBranches(a, b *Instance) (*BranchComparison, error) {
+	if a.ID == b.ID {
+		return nil, fmt.Errorf("%w: %s", ErrSameInstance, a.ID)
+	}
+	if a.StoryID != b.StoryID || a.DefHash != b.DefHash {
+		return nil, fmt.Errorf("%w: %s and %s pin different story versions", ErrBranchMismatch, a.ID, b.ID)
+	}
+	ra := a.RootID
+	if ra == "" {
+		ra = a.ID
+	}
+	rb := b.RootID
+	if rb == "" {
+		rb = b.ID
+	}
+	if ra != rb {
+		return nil, fmt.Errorf("%w: roots %s and %s", ErrBranchMismatch, ra, rb)
+	}
+	d, err := c.pinnedDef(a)
+	if err != nil {
+		return nil, err
+	}
+	stepsA := BuildTrace(a, d)
+	stepsB := BuildTrace(b, d)
+	k := 0
+	for k < len(stepsA) && k < len(stepsB) && sameLogPosition(a.Log[k], b.Log[k]) {
+		k++
+	}
+	forkNode := a.Current
+	if k > 0 {
+		forkNode = a.Log[k-1].Node
+	}
+	return &BranchComparison{
+		BaseID:       a.ID,
+		OtherID:      b.ID,
+		ForkNode:     forkNode,
+		ForkLabel:    b.Label,
+		Prefix:       append([]TraceStep{}, stepsA[:k]...),
+		BaseSteps:    append([]TraceStep{}, stepsA[k:]...),
+		OtherSteps:   append([]TraceStep{}, stepsB[k:]...),
+		BaseFacts:    cloneFacts(a.Facts),
+		OtherFacts:   cloneFacts(b.Facts),
+		BaseRewards:  append([]Reward{}, a.Rewards...),
+		OtherRewards: append([]Reward{}, b.Rewards...),
+		BaseCurrent:  a.Current,
+		OtherCurrent: b.Current,
+	}, nil
+}
+
+func sameLogPosition(x, y LogEntry) bool {
+	return x.Node == y.Node && x.ChoiceID == y.ChoiceID
 }
 
 func applyEffect(facts map[string]interface{}, eff Effect) error {
