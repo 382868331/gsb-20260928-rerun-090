@@ -1,4 +1,4 @@
-import type { AppliedResponse, InstanceResponse, StoryDefinition } from "./types";
+import type { AppliedResponse, InstanceResponse, MigrationReview, StoryDefinition } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -16,7 +16,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const text = await res.text();
   let body: unknown = null;
   if (text) {
-    body = JSON.parse(text);
+    try {
+      body = JSON.parse(text);
+    } catch {
+      throw new ApiError(res.status, `HTTP ${res.status}: ${text}`);
+    }
   }
   if (!res.ok) {
     const message =
@@ -70,5 +74,16 @@ export function forkInstance(
   return request(`/api/instances/${encodeURIComponent(id)}/forks`, {
     method: "POST",
     body: JSON.stringify({ label }),
+  });
+}
+
+export function listMigrations(): Promise<{ migrations: MigrationReview[] }> {
+  return request("/api/migrations");
+}
+
+export function adoptMigration(id: string, target?: string): Promise<InstanceResponse> {
+  return request(`/api/instances/${encodeURIComponent(id)}/migration`, {
+    method: "POST",
+    body: JSON.stringify(target ? { target } : {}),
   });
 }

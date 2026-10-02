@@ -7,6 +7,7 @@ export interface LogStep {
   choiceText?: string;
   rewards: Reward[];
   at: string;
+  migration?: import("../types").MigrationSummary;
 }
 
 // buildSteps replays the persisted log against the story definition so the
@@ -34,6 +35,7 @@ export function buildSteps(inst: Instance, def?: StoryDefinition): LogStep[] {
       choiceText,
       rewards,
       at: entry.at,
+      migration: entry.migration,
     };
   });
 }
@@ -66,6 +68,11 @@ export function LogEntryList({ inst, def, from = 0, to }: ListProps) {
               奖励：{describeReward(r)}
             </div>
           ))}
+          {step.migration && (
+            <div className="log-migration">
+              规则交界：{step.migration.fromVersion} → {step.migration.toVersion}；旧事件截止于 <code>{step.migration.boundaryNode}</code>，{step.migration.note}
+            </div>
+          )}
         </li>
       ))}
     </ol>

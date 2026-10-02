@@ -76,9 +76,50 @@ export interface Instance {
   parentId?: string;
   rootId?: string;
   label?: string;
-  log: { node: string; choiceId?: string; at: string }[];
+  log: { node: string; choiceId?: string; at: string; migration?: MigrationSummary }[];
+  decisions?: Record<string, unknown>;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface MigrationSummary {
+  fromVersion: string;
+  toVersion: string;
+  boundaryNode: string;
+  explicitTarget?: string;
+  note: string;
+}
+
+export interface ReviewedEvent {
+  node: string;
+  choiceId?: string;
+  summary: string;
+  status: string;
+}
+
+export interface RuleChange {
+  nodeId: string;
+  choiceId?: string;
+  kind: "condition" | "rewards" | "target" | "node" | string;
+  before?: string;
+  after?: string;
+  impact: string;
+}
+
+export interface MigrationReview {
+  instanceId: string;
+  label: string;
+  status: "current" | "upgradable" | "blocked" | string;
+  currentVersion: string;
+  currentHash: string;
+  latestVersion: string;
+  latestHash: string;
+  boundaryNode: string;
+  completedEvents: ReviewedEvent[];
+  futureChanges: RuleChange[];
+  missingNodes: string[];
+  availableTargets: string[];
+  rewardNotice: string;
 }
 
 export interface InstanceResponse {

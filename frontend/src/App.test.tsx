@@ -312,4 +312,31 @@ describe("story play UI", () => {
     expect(within(cols[0] as HTMLElement).getByText(/领工钱/)).toBeTruthy();
     expect((cols[1] as HTMLElement).textContent).not.toContain("领工钱");
   });
+
+  it("does not white-screen when an older save omits collections", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: unknown, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/instances" && (init?.method ?? "GET") === "GET") {
+          return Promise.resolve(jsonResponse({ instances: [{ id: "legacy", storyId: "t", current: "square" }] }));
+        }
+        if (url === "/api/instances/legacy" && (init?.method ?? "GET") === "GET") {
+          return Promise.resolve(jsonResponse({
+            instance: { id: "legacy", storyId: "t", version: "v1", defHash: "h", current: "square" },
+            view: { node: mockStory.nodes.square, availableChoices: mockStory.nodes.square.choices.map((c) => ({ ...c, allowed: true })) },
+          }));
+        }
+        if (url === "/api/migrations" && (init?.method ?? "GET") === "GET") {
+          return Promise.resolve(jsonResponse({ migrations: [] }));
+        }
+        return Promise.resolve(handle(input as string, init));
+      }) as unknown as typeof fetch,
+    );
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("square").length).toBeGreaterThan(0));
+    fireEvent.click(screen.getAllByText("square")[0]);
+    await waitFor(() => expect(screen.getByText("去干活")).toBeTruthy());
+    expect(screen.getByText("尚无奖励。")).toBeTruthy();
+  });
 });

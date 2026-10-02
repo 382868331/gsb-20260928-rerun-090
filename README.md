@@ -34,8 +34,11 @@ npm run dev
 - 奖励按「同一节点的同一次访问 + 同一选项」只发一次；重复裸提交返回
   `409`。客户端每次点击生成 `idempotencyKey`，网络重试命中缓存结果
   （`applied.duplicate=true`），绝不二次发奖。
-- 开始实例时固定剧情版本哈希；之后剧情被修改会得到 `409 version drift`，
-  旧存档仍按旧定义继续。
+- 开始实例时固定剧情版本哈希；旧定义随版本归档持久化，重启后旧存档仍可继续。
+- 剧情修订后先通过迁移审查列出每个存档：已完成事件和已领奖励保持原样，
+  只有未来选择受影响。作者必须为某个分支显式采用新规则；未采用的分支继续旧版本。
+- 若修订删除了存档当前节点，迁移会停在审查处并要求明确选择接续节点，系统不会跳到默认位置。
+  迁移记录写入剧情日志，重开时说明新旧规则交界；撤回或重复确认尚未采用的修改不会改写历史。
 - `POST /api/instances/{id}/forks` 在当前选择之前建立「试演」分支：分支与
 - 存档以每实例一个 JSON 文件原子落盘，中断/重启后 `GET` 可继续。
 - 空存档列表是正常状态：`GET /api/instances` 在全新数据下返回
@@ -57,6 +60,10 @@ npm run dev
 | GET | `/api/instances/{id}` | 继续：当前节点 + 允许的选项 |
 | POST | `/api/instances/{id}/choices` | 提交选择 `{choiceId, idempotencyKey}` |
 | POST | `/api/instances/{id}/forks` | 建立试演分支 `{label}` |
+| PUT | `/api/stories/{id}` | 发布剧情修订并归档新版本 |
+| GET | `/api/migrations` | 列出各存档/分支的规则影响审查 |
+| GET | `/api/instances/{id}/migration` | 查看单个存档迁移审查 |
+| POST | `/api/instances/{id}/migration` | 仅将该存档采用到最新版本，节点丢失时需 `{target}` |
 
 ## 测试
 

@@ -13,9 +13,9 @@ import (
 	"storyplatform/internal/story"
 )
 
-func newTestServer(t *testing.T) (http.Handler, *story.Catalog, story.Store) {
+func newTestServer(t *testing.T) (http.Handler, StoryRuntime, story.Store) {
 	t.Helper()
-	catalog := story.NewCatalog(seed.Story())
+	catalog := story.NewVersionedCatalog(seed.Story())
 	store := story.NewMemoryStore()
 	h := NewHandler(catalog, store, seed.InitialFacts())
 	mux := http.NewServeMux()
@@ -79,7 +79,7 @@ func TestListInstancesEmptyMemoryStore(t *testing.T) {
 }
 
 func TestListInstancesEmptyFileStore(t *testing.T) {
-	catalog := story.NewCatalog(seed.Story())
+	catalog := story.NewVersionedCatalog(seed.Story())
 	store, err := story.NewFileStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

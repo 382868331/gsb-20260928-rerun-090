@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
-import type { AppliedResponse, Instance, NodeView, StoryDefinition } from "./types";
+import type { Instance, MigrationReview, NodeView, StoryDefinition } from "./types";
 import {
   ApiError,
   createInstance,
+  adoptMigration,
   forkInstance,
   getInstance,
   getStory,
   listInstances,
+  listMigrations,
   newIdempotencyKey,
   submitChoice,
 } from "./api";
@@ -16,6 +18,8 @@ import { BranchList } from "./components/BranchList";
 import { RewardLog } from "./components/RewardLog";
 import { StoryLog } from "./components/StoryLog";
 import { ComparePanel } from "./components/ComparePanel";
+import { MigrationPanel } from "./components/MigrationPanel";
+import { normalizeInstance, normalizeView } from "./normalize";
 
 export function App() {
   const [instances, setInstances] = useState<Instance[]>([]);
@@ -28,30 +32,46 @@ export function App() {
   const [listError, setListError] = useState<string | null>(null);
   const [stories, setStories] = useState<Record<string, StoryDefinition>>({});
   const [compareId, setCompareId] = useState<string | null>(null);
+  const [migrations, setMigrations] = useState<MigrationReview[]>([]);
+  const [migrationError, setMigrationError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const refreshList = useCallback(async () => {
     try {
       const { instances } = await listInstances();
       // An empty archive is a valid state, never an error; older backends may
       // still send null, so normalise before anything iterates the list.
-      setInstances(Array.isArray(instances) ? instances : []);
+      setInstances((Array.isArray(instances) ? instances : []).map(normalizeInstance));
       setListError(null);
     } catch (e) {
       setListError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
+  const refreshMigrations = useCallback(async () => {
+    try {
+      const { migrations } = await listMigrations();
+      setMigrations(Array.isArray(migrations) ? migrations : []);
+      setMigrationError(null);
+    } catch (e) {
+      setMigrationError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
   const loadInstance = useCallback(async (id: string) => {
     const res = await getInstance(id);
-    setInstance(res.instance);
-    setView(res.view);
+    const normalized = normalizeInstance(res.instance);
+    setInstance(normalized);
+    setView(normalizeView(res.view));
     setCurrentId(id);
     setError(null);
+    setLoadError(null);
   }, []);
 
   useEffect(() => {
     refreshList();
-  }, [refreshList]);
+    refreshMigrations();
+  }, [refreshList, refreshMigrations]);
 
   useEffect(() => {
     if (!instance) return;
@@ -66,15 +86,18 @@ export function App() {
     if (currentId) {
       loadInstance(currentId).catch((e: unknown) => {
         setError(e instanceof Error ? e.message : String(e));
+        setLoadError(e instanceof Error ? e.message : String(e));
       });
     }
   }, [currentId, loadInstance]);
 
-  const applyResponse = useCallback((res: AppliedResponse | { instance: Instance; view: NodeView }) => {
-    setInstance(res.instance);
-    setView(res.view);
+  const applyResponse = useCallback((res: { instance: unknown; view: unknown }) => {
+    const normalized = normalizeInstance(res.instance as Partial<Instance>);
+    setInstance(normalized);
+    setView(normalizeView(res.view as Partial<NodeView>));
     refreshList();
-  }, [refreshList]);
+    refreshMigrations();
+  }, [refreshList, refreshMigrations]);
 
   const handleStart = async () => {
     setBusy(true);
@@ -141,6 +164,21 @@ export function App() {
     : [];
   const compareOpen = compareId !== null && siblings.length > 0;
 
+  const handleAdopt = async (review: MigrationReview, target?: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await adoptMigration(review.instanceId, target);
+      applyResponse(res);
+      setCurrentId(res.instance.id);
+      await refreshMigrations();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="app">
       <header className="topbar">
@@ -169,6 +207,12 @@ export function App() {
               <button onClick={refreshList}>重试</button>
             </div>
           )}
+          {migrationError && (
+            <div className="banner banner-error" role="alert">
+              规则审查读取失败：{migrationError}
+              <button onClick={refreshMigrations}>重试规则审查</button>
+            </div>
+          )}
           <BranchList
             instances={instances}
             currentId={currentId}
@@ -177,12 +221,25 @@ export function App() {
         </aside>
         <section className="stage">
           {error && <div className="banner banner-error" role="alert">{error}</div>}
+          {loadError && currentId && (
+            <div className="banner banner-error" role="alert">
+              存档读取失败：{loadError}。已保留当前选择。
+              <button onClick={() => loadInstance(currentId)}>重试读取</button>
+            </div>
+          )}
           {notice && <div className="banner banner-notice">{notice}</div>}
           {!instance ? (
             <div className="empty">点击“开始新故事”进入《雾港抉择》。</div>
           ) : (
             <>
               <NodePanel view={view} busy={busy} onChoose={handleChoose} />
+              <MigrationPanel
+                reviews={migrations}
+                currentId={currentId}
+                busy={busy}
+                onAdopt={handleAdopt}
+                onRefresh={refreshMigrations}
+              />
               <div className="panels">
                 <FactsPanel instance={instance} />
                 <RewardLog instance={instance} />

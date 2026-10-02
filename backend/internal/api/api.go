@@ -15,14 +15,32 @@ import (
 )
 
 type Handler struct {
-	catalog *story.Catalog
-	store   story.Store
-	initial map[string]interface{}
-	locks   sync.Map // instance id -> *sync.Mutex
+	catalog  StoryRuntime
+	store    story.Store
+	defStore story.DefinitionStore
+	initial  map[string]interface{}
+	locks    sync.Map // instance id -> *sync.Mutex
 }
 
-func NewHandler(catalog *story.Catalog, store story.Store, initial map[string]interface{}) *Handler {
+type StoryRuntime interface {
+	Add(def *story.Definition) error
+	Get(id string) (*story.Definition, error)
+	List() []*story.Definition
+	Start(storyID, instanceID string, initial map[string]interface{}) (*story.Instance, *story.Definition, error)
+	View(inst *story.Instance) (story.NodeView, error)
+	Apply(inst *story.Instance, choiceID, idemKey string) (*story.AppliedChoice, error)
+	ReviewMigration(inst *story.Instance) (*story.MigrationReview, error)
+	AdoptLatest(inst *story.Instance, explicitTarget string) error
+}
+
+func NewHandler(catalog StoryRuntime, store story.Store, initial map[string]interface{}) *Handler {
 	return &Handler{catalog: catalog, store: store, initial: initial}
+}
+
+func NewHandlerWithDefinitionStore(catalog StoryRuntime, store story.Store, defStore story.DefinitionStore, initial map[string]interface{}) *Handler {
+	h := NewHandler(catalog, store, initial)
+	h.defStore = defStore
+	return h
 }
 
 func (h *Handler) Register(mux *http.ServeMux) {
@@ -33,6 +51,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/instances/{id}/choices", h.applyChoice)
 	mux.HandleFunc("POST /api/instances/{id}/forks", h.forkInstance)
 	mux.HandleFunc("GET /api/instances", h.listInstances)
+	mux.HandleFunc("GET /api/migrations", h.listMigrations)
+	mux.HandleFunc("GET /api/instances/{id}/migration", h.migrationReview)
+	mux.HandleFunc("POST /api/instances/{id}/migration", h.adoptMigration)
+	mux.HandleFunc("PUT /api/stories/{id}", h.publishStory)
 }
 
 type instanceResponse struct {
@@ -61,8 +83,105 @@ func writeError(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	case errors.Is(err, story.ErrStoryVersionDrift):
 		status = http.StatusConflict
+	case errors.Is(err, story.ErrMigrationRequiresChoice):
+		status = http.StatusConflict
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
+}
+
+func (h *Handler) publishStory(w http.ResponseWriter, r *http.Request) {
+	var def story.Definition
+	if err := json.NewDecoder(r.Body).Decode(&def); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid story definition"})
+		return
+	}
+	if def.ID == "" {
+		def.ID = r.PathValue("id")
+	}
+	if def.ID != r.PathValue("id") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "story id does not match path"})
+		return
+	}
+	if err := h.catalog.Add(&def); err != nil {
+		writeError(w, err)
+		return
+	}
+	if h.defStore != nil {
+		if err := h.defStore.SaveDefinition(&def); err != nil {
+			writeError(w, err)
+			return
+		}
+	}
+	hash, _ := story.DefHash(&def)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"id": def.ID, "version": def.Version, "defHash": hash})
+}
+
+func (h *Handler) listMigrations(w http.ResponseWriter, r *http.Request) {
+	insts, err := h.store.List()
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	reviews := make([]*story.MigrationReview, 0, len(insts))
+	for _, inst := range insts {
+		if r.URL.Query().Get("storyId") != "" && inst.StoryID != r.URL.Query().Get("storyId") {
+			continue
+		}
+		review, err := h.catalog.ReviewMigration(inst)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		if review.Status != "current" {
+			reviews = append(reviews, review)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"migrations": reviews})
+}
+
+func (h *Handler) migrationReview(w http.ResponseWriter, r *http.Request) {
+	inst, err := h.store.Load(r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	review, err := h.catalog.ReviewMigration(inst)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"migration": review})
+}
+
+type adoptRequest struct {
+	Target string `json:"target"`
+}
+
+func (h *Handler) adoptMigration(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	unlock := h.lockInstance(id)
+	defer unlock()
+	inst, err := h.store.Load(id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var req adoptRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := h.catalog.AdoptLatest(inst, strings.TrimSpace(req.Target)); err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := h.store.Save(inst); err != nil {
+		writeError(w, err)
+		return
+	}
+	view, err := h.catalog.View(inst)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, instanceResponse{Instance: inst, View: view})
 }
 
 func newID() string {

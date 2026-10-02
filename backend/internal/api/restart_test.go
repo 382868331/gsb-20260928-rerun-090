@@ -23,7 +23,7 @@ func TestRestartResumeFromDisk(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		catalog := story.NewCatalog(seed.Story())
+		catalog := story.NewVersionedCatalog(seed.Story())
 		h := NewHandler(catalog, store, seed.InitialFacts())
 		mux := http.NewServeMux()
 		h.Register(mux)

@@ -128,3 +128,25 @@ code { background: #0f1320; padding: 1px 6px; border-radius: 4px; }
 .compare-shared h3, .compare-col h3 { margin: 0 0 8px; font-size: 14px; color: #9fb0d0; }
 .compare-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 .compare-col { border: 1px solid #2a3350; border-radius: 8px; padding: 10px 14px; }
+
+.migration-panel { margin: 0 0 20px; }
+.migration-review {
+  border: 1px solid #3a4665;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-top: 12px;
+}
+.migration-review.active { border-color: #5f78b8; background: #20273a; }
+.migration-review h3 { margin: 0 0 8px; font-size: 14px; color: #c7d2ea; }
+.migration-review details { margin: 8px 0; }
+.migration-review summary { cursor: pointer; color: #9fb0d0; }
+.completed-events, .rule-changes { margin: 8px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+.completed-events li { display: flex; justify-content: space-between; gap: 10px; }
+.completed-events em { color: #9fd8a8; font-style: normal; }
+.rule-changes strong { color: #ffd48a; margin-right: 8px; }
+.rule-changes p { margin: 4px 0; }
+.reward-notice { color: #9fd8a8; }
+.target-choice label { display: flex; flex-direction: column; gap: 8px; color: #ffd48a; }
+.target-choice select { width: 100%; background: #12141a; color: #e6e8ee; border: 1px solid #3a4665; border-radius: 8px; padding: 8px; }
+.migration-actions { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+.log-migration { color: #ffd48a; border-left: 3px solid #7a6230; padding-left: 8px; margin-top: 6px; }

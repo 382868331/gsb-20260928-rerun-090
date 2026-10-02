@@ -32,8 +32,42 @@ func main() {
 	if err != nil {
 		log.Fatalf("open data dir: %v", err)
 	}
-	catalog := story.NewCatalog(seed.Story())
-	h := api.NewHandler(catalog, store, seed.InitialFacts())
+	defDir := os.Getenv("DEFINITION_DIR")
+	if defDir == "" {
+		defDir = filepath.Join(dataDir, "definitions")
+	}
+	defStore, err := story.NewFileDefinitionStore(defDir)
+	if err != nil {
+		log.Fatalf("open definition dir: %v", err)
+	}
+	catalog := story.NewVersionedCatalog()
+	defs, err := defStore.ListDefinitions()
+	if err != nil {
+		log.Fatalf("load definitions: %v", err)
+	}
+	seedHashDef := seed.Story()
+	seedHash, _ := story.DefHash(seedHashDef)
+	haveSeed := false
+	for _, def := range defs {
+		if err := catalog.Add(def); err != nil {
+			log.Fatalf("load saved definition: %v", err)
+		}
+		if def.ID == seedHashDef.ID {
+			hash, _ := story.DefHash(def)
+			if hash == seedHash {
+				haveSeed = true
+			}
+		}
+	}
+	if err := catalog.Add(seedHashDef); err != nil {
+		log.Fatalf("load seed definition: %v", err)
+	}
+	if !haveSeed {
+		if err := defStore.SaveDefinition(seedHashDef); err != nil {
+			log.Fatalf("save seed definition: %v", err)
+		}
+	}
+	h := api.NewHandlerWithDefinitionStore(catalog, store, defStore, seed.InitialFacts())
 	mux := http.NewServeMux()
 	h.Register(mux)
 

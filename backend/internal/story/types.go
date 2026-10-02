@@ -55,11 +55,55 @@ type Instance struct {
 	Decisions map[string]IdemRecord  `json:"decisions,omitempty"`
 	Branches  map[string]BranchInfo  `json:"branches,omitempty"`
 	Log       []LogEntry             `json:"log"`
+	Migration *MigrationRecord       `json:"migration,omitempty"`
 	ParentID  string                 `json:"parentId,omitempty"`
 	RootID    string                 `json:"rootId,omitempty"`
 	Label     string                 `json:"label,omitempty"`
 	CreatedAt string                 `json:"createdAt"`
 	UpdatedAt string                 `json:"updatedAt"`
+}
+
+type MigrationRecord struct {
+	FromHash       string `json:"fromHash"`
+	ToHash         string `json:"toHash"`
+	FromVersion    string `json:"fromVersion"`
+	ToVersion      string `json:"toVersion"`
+	BoundaryNode   string `json:"boundaryNode"`
+	ContinuedAt    string `json:"continuedAt"`
+	ExplicitTarget string `json:"explicitTarget,omitempty"`
+	Note           string `json:"note,omitempty"`
+}
+
+type MigrationReview struct {
+	InstanceID       string          `json:"instanceId"`
+	Label            string          `json:"label"`
+	Status           string          `json:"status"` // current | upgradable | blocked
+	CurrentVersion   string          `json:"currentVersion"`
+	CurrentHash      string          `json:"currentHash"`
+	LatestVersion    string          `json:"latestVersion"`
+	LatestHash       string          `json:"latestHash"`
+	BoundaryNode     string          `json:"boundaryNode"`
+	CompletedEvents  []ReviewedEvent `json:"completedEvents"`
+	FutureChanges    []RuleChange    `json:"futureChanges"`
+	MissingNodes     []string        `json:"missingNodes"`
+	AvailableTargets []string        `json:"availableTargets"`
+	RewardNotice     string          `json:"rewardNotice"`
+}
+
+type ReviewedEvent struct {
+	Node     string `json:"node"`
+	ChoiceID string `json:"choiceId,omitempty"`
+	Summary  string `json:"summary"`
+	Status   string `json:"status"`
+}
+
+type RuleChange struct {
+	NodeID   string `json:"nodeId"`
+	ChoiceID string `json:"choiceId,omitempty"`
+	Kind     string `json:"kind"` // condition | rewards | target | node
+	Before   string `json:"before,omitempty"`
+	After    string `json:"after,omitempty"`
+	Impact   string `json:"impact"`
 }
 
 // BranchInfo records a rehearsal branch created from a parent instance.
@@ -81,9 +125,18 @@ type IdemRecord struct {
 }
 
 type LogEntry struct {
-	Node     string `json:"node"`
-	ChoiceID string `json:"choiceId,omitempty"`
-	At       string `json:"at"`
+	Node      string            `json:"node"`
+	ChoiceID  string            `json:"choiceId,omitempty"`
+	At        string            `json:"at"`
+	Migration *MigrationSummary `json:"migration,omitempty"`
+}
+
+type MigrationSummary struct {
+	FromVersion    string `json:"fromVersion"`
+	ToVersion      string `json:"toVersion"`
+	BoundaryNode   string `json:"boundaryNode"`
+	ExplicitTarget string `json:"explicitTarget,omitempty"`
+	Note           string `json:"note"`
 }
 
 type AvailableChoice struct {

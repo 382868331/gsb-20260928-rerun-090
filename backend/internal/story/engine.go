@@ -12,16 +12,17 @@ import (
 
 // Errors returned by the runtime. Callers can inspect these with errors.Is.
 var (
-	ErrUnknownStory      = fmt.Errorf("unknown story")
-	ErrUnknownInstance   = fmt.Errorf("unknown instance")
-	ErrUnknownNode       = fmt.Errorf("unknown current node")
-	ErrUnknownChoice     = fmt.Errorf("unknown choice")
-	ErrConditionFailed   = fmt.Errorf("choice condition is not satisfied for this story version")
-	ErrChoiceNotOnNode   = fmt.Errorf("choice is not attached to the current node")
-	ErrStoryVersionDrift = fmt.Errorf("story version no longer matches the instance; pin the definition and retry")
-	ErrDuplicateChoice   = fmt.Errorf("choice already applied; duplicate submission grants no reward")
-	ErrBadEffect         = fmt.Errorf("invalid effect")
-	ErrEndNode           = fmt.Errorf("story has ended")
+	ErrUnknownStory            = fmt.Errorf("unknown story")
+	ErrUnknownInstance         = fmt.Errorf("unknown instance")
+	ErrUnknownNode             = fmt.Errorf("unknown current node")
+	ErrUnknownChoice           = fmt.Errorf("unknown choice")
+	ErrConditionFailed         = fmt.Errorf("choice condition is not satisfied for this story version")
+	ErrChoiceNotOnNode         = fmt.Errorf("choice is not attached to the current node")
+	ErrStoryVersionDrift       = fmt.Errorf("story version no longer matches the instance; pin the definition and retry")
+	ErrDuplicateChoice         = fmt.Errorf("choice already applied; duplicate submission grants no reward")
+	ErrBadEffect               = fmt.Errorf("invalid effect")
+	ErrEndNode                 = fmt.Errorf("story has ended")
+	ErrMigrationRequiresChoice = fmt.Errorf("migration requires an explicit continuation")
 )
 
 // claimSep separates visit id and choice in a claim key.
@@ -103,6 +104,10 @@ func (c *Catalog) Start(storyID, instanceID string, initial map[string]interface
 	if err != nil {
 		return nil, nil, err
 	}
+	return startWithDefinition(d, storyID, instanceID, initial)
+}
+
+func startWithDefinition(d *Definition, storyID, instanceID string, initial map[string]interface{}) (*Instance, *Definition, error) {
 	if err := ValidateDefinition(d); err != nil {
 		return nil, nil, err
 	}
@@ -196,7 +201,10 @@ func (c *Catalog) Apply(inst *Instance, choiceID, idemKey string) (*AppliedChoic
 	if err != nil {
 		return nil, err
 	}
+	return applyWithDefinition(d, inst, choiceID, idemKey)
+}
 
+func applyWithDefinition(d *Definition, inst *Instance, choiceID, idemKey string) (*AppliedChoice, error) {
 	// A retried request carrying an idempotency key replays the original
 	// outcome even if play has since moved to another node.
 	if idemKey != "" {
