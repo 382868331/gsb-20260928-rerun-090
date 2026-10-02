@@ -115,6 +115,14 @@ code { background: #0f1320; padding: 1px 6px; border-radius: 4px; }
 .log-node-text { color: #c7d2ea; }
 .log-choice { color: #8fb3ff; }
 .log-reward { color: #9fd8a8; }
+.log-note { color: #e8c98a; border-left: 3px solid #7a6432; padding-left: 8px; margin-top: 4px; }
+.migration h3 { margin: 12px 0 6px; font-size: 14px; }
+.migration-events, .migration-future { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.migration .tag { background: #2a3550; color: #b3d0ff; padding: 2px 8px; border-radius: 6px; font-size: 12px; margin-left: 6px; }
+.migration .tag-revised { background: #4a3220; color: #f0b070; }
+.migration .tag-removed { background: #43212a; color: #ffb3c0; }
+.migration-actions { display: flex; gap: 10px; margin-top: 12px; }
+.migration-head { display: flex; justify-content: space-between; align-items: center; }
 
 .compare { margin-top: 20px; }
 .compare-head { display: flex; align-items: center; gap: 14px; }

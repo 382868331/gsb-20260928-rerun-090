@@ -1,4 +1,10 @@
-import type { AppliedResponse, InstanceResponse, StoryDefinition } from "./types";
+import type {
+  AppliedResponse,
+  InstanceResponse,
+  MigrationImpact,
+  MigrationResponse,
+  StoryDefinition,
+} from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -70,5 +76,19 @@ export function forkInstance(
   return request(`/api/instances/${encodeURIComponent(id)}/forks`, {
     method: "POST",
     body: JSON.stringify({ label }),
+  });
+}
+
+export function getMigration(id: string): Promise<{ migration: MigrationImpact }> {
+  return request(`/api/instances/${encodeURIComponent(id)}/migration`);
+}
+
+export function decideMigration(
+  id: string,
+  action: "adopt" | "defer",
+): Promise<MigrationResponse> {
+  return request(`/api/instances/${encodeURIComponent(id)}/migration`, {
+    method: "POST",
+    body: JSON.stringify({ action }),
   });
 }

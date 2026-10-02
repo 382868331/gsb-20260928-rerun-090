@@ -313,3 +313,117 @@ describe("story play UI", () => {
     expect((cols[1] as HTMLElement).textContent).not.toContain("领工钱");
   });
 });
+
+describe("resilience and rule revision review", () => {
+  it("does not white-screen when a fresh instance omits the rewards collection", async () => {
+    const baseHandle = handle;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: unknown, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/instances" && method === "POST") {
+          const res = baseHandle(url, init);
+          return res.json().then((body: { instance: Instance; view: NodeView }) => {
+            const b = JSON.parse(JSON.stringify(body)) as { instance: Partial<Instance>; view: NodeView };
+            delete b.instance.rewards; // older backends omitted empty collections
+            return jsonResponse(b, 201);
+          });
+        }
+        return Promise.resolve(baseHandle(input as string, init));
+      }) as unknown as typeof fetch,
+    );
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "开始新故事" }));
+    await waitFor(() => expect(screen.getByText("去干活")).toBeTruthy());
+    expect(screen.getByText("尚无奖励。")).toBeTruthy();
+    expect(screen.getByText("剧情记录")).toBeTruthy();
+  });
+
+  it("keeps the selection and offers retry when a save genuinely fails to load", async () => {
+    let failGet = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: unknown, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (failGet && url.startsWith("/api/instances/") && method === "GET") {
+          return Promise.resolve(jsonResponse({ error: "disk gone" }, 500));
+        }
+        return Promise.resolve(handle(input as string, init));
+      }) as unknown as typeof fetch,
+    );
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "开始新故事" }));
+    await waitFor(() => expect(screen.getByText(/存档读取失败/)).toBeTruthy());
+    // The failed save stays selected; no new story is started behind the scenes.
+    expect(Object.keys(state.instances).length).toBe(1);
+    failGet = false;
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(screen.getByText("去干活")).toBeTruthy());
+    expect(screen.queryByText(/存档读取失败/)).toBeNull();
+    expect(Object.keys(state.instances).length).toBe(1);
+  });
+
+  it("reviews a rule revision and adopts it for this branch only", async () => {
+    const impact = {
+      storyId: "t",
+      fromVersion: "v1",
+      toVersion: "v2",
+      fromHash: "h",
+      toHash: "h2",
+      upToDate: false,
+      currentNode: "square",
+      currentNodeMissing: false,
+      completed: [
+        { node: "square", choiceId: "chop_wood", status: "revised", detail: "新规则修订了该选项" },
+      ],
+      future: [{ choiceId: "bribe_guard", text: "贿赂卫兵", change: "condition-changed" }],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: unknown, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        const parts = url.split("/");
+        if (parts[4] === "migration" && method === "GET") {
+          return Promise.resolve(jsonResponse({ migration: impact }));
+        }
+        if (parts[4] === "migration" && method === "POST") {
+          const inst = state.instances[parts[3]];
+          inst.version = "v2";
+          inst.defHash = "h2";
+          inst.log.push({ node: inst.current, note: "规则迁移：v1 → v2", at: "t9" });
+          return Promise.resolve(jsonResponse({ migration: { ...impact, upToDate: true }, instance: inst, view: viewFor(inst), versionDrift: false }));
+        }
+        if (url.startsWith("/api/instances/") && method === "GET" && parts.length === 4) {
+          const inst = state.instances[parts[3]];
+          const drift = inst.defHash !== "h2";
+          return Promise.resolve(
+            jsonResponse({
+              instance: inst,
+              view: viewFor(inst),
+              ...(drift ? { versionDrift: true, latestVersion: "v2", latestDefHash: "h2" } : {}),
+            }),
+          );
+        }
+        return Promise.resolve(handle(input as string, init));
+      }) as unknown as typeof fetch,
+    );
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "开始新故事" }));
+    await waitFor(() => expect(screen.getByText(/剧情规则已有新版本/)).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "查看影响" }));
+    await waitFor(() => expect(screen.getByText("规则修订影响审查")).toBeTruthy());
+    expect(screen.getByText(/规则已修订 · 事件保持原样/)).toBeTruthy();
+    expect(screen.getByText("条件变化")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /采用新规则/ }));
+    await waitFor(() => expect(screen.getByText(/已采用新规则/)).toBeTruthy());
+    expect(screen.queryByText(/剧情规则已有新版本/)).toBeNull();
+    // The boundary is explained in the story log.
+    expect(screen.getByText(/规则迁移：v1 → v2/)).toBeTruthy();
+  });
+});
+

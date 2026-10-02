@@ -1,10 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
-import type { AppliedResponse, Instance, NodeView, StoryDefinition } from "./types";
+import type {
+  AppliedResponse,
+  Instance,
+  InstanceResponse,
+  MigrationImpact,
+  NodeView,
+  StoryDefinition,
+} from "./types";
 import {
   ApiError,
   createInstance,
+  decideMigration,
   forkInstance,
   getInstance,
+  getMigration,
   getStory,
   listInstances,
   newIdempotencyKey,
@@ -16,6 +25,7 @@ import { BranchList } from "./components/BranchList";
 import { RewardLog } from "./components/RewardLog";
 import { StoryLog } from "./components/StoryLog";
 import { ComparePanel } from "./components/ComparePanel";
+import { MigrationPanel } from "./components/MigrationPanel";
 
 export function App() {
   const [instances, setInstances] = useState<Instance[]>([]);
@@ -26,8 +36,11 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [stories, setStories] = useState<Record<string, StoryDefinition>>({});
   const [compareId, setCompareId] = useState<string | null>(null);
+  const [drift, setDrift] = useState<{ latestVersion: string; latestDefHash: string } | null>(null);
+  const [migration, setMigration] = useState<MigrationImpact | null>(null);
 
   const refreshList = useCallback(async () => {
     try {
@@ -41,12 +54,27 @@ export function App() {
     }
   }, []);
 
+  // A genuine read failure keeps the user's selection and offers a retry;
+  // it never falls back to silently starting another story.
   const loadInstance = useCallback(async (id: string) => {
-    const res = await getInstance(id);
-    setInstance(res.instance);
-    setView(res.view);
-    setCurrentId(id);
-    setError(null);
+    try {
+      const res = await getInstance(id);
+      setInstance(res.instance);
+      setView(res.view);
+      setCurrentId(id);
+      setError(null);
+      setLoadError(null);
+      setMigration(null);
+      setDrift(
+        res.versionDrift && res.latestDefHash
+          ? { latestVersion: res.latestVersion ?? "", latestDefHash: res.latestDefHash }
+          : null,
+      );
+    } catch (e) {
+      setInstance(null);
+      setView(null);
+      setLoadError(e instanceof Error ? e.message : String(e));
+    }
   }, []);
 
   useEffect(() => {
@@ -64,15 +92,19 @@ export function App() {
 
   useEffect(() => {
     if (currentId) {
-      loadInstance(currentId).catch((e: unknown) => {
-        setError(e instanceof Error ? e.message : String(e));
-      });
+      loadInstance(currentId);
     }
   }, [currentId, loadInstance]);
 
-  const applyResponse = useCallback((res: AppliedResponse | { instance: Instance; view: NodeView }) => {
+  const applyResponse = useCallback((res: AppliedResponse | InstanceResponse) => {
     setInstance(res.instance);
     setView(res.view);
+    setMigration(null);
+    setDrift(
+      res.versionDrift && res.latestDefHash
+        ? { latestVersion: res.latestVersion ?? "", latestDefHash: res.latestDefHash }
+        : null,
+    );
     refreshList();
   }, [refreshList]);
 
@@ -136,6 +168,45 @@ export function App() {
   };
 
   const rootOf = (i: Instance) => i.rootId || i.id;
+
+  const handleReviewMigration = async () => {
+    if (!currentId || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const { migration } = await getMigration(currentId);
+      setMigration(migration);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleMigrationDecision = async (action: "adopt" | "defer") => {
+    if (!currentId || busy) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await decideMigration(currentId, action);
+      applyResponse(res);
+      setNotice(
+        action === "adopt"
+          ? "已采用新规则：此前事件保持原样，此后选择按新规则求值。"
+          : "已保留原版本，已发生事件不受影响；可随时重新评估。",
+      );
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        setError(`迁移被拒绝：${e.message}`);
+      } else {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const siblings = instance
     ? instances.filter((i) => i.id !== instance.id && rootOf(i) === rootOf(instance))
     : [];
@@ -178,7 +249,30 @@ export function App() {
         <section className="stage">
           {error && <div className="banner banner-error" role="alert">{error}</div>}
           {notice && <div className="banner banner-notice">{notice}</div>}
-          {!instance ? (
+          {loadError && (
+            <div className="banner banner-error" role="alert">
+              存档读取失败：{loadError}
+              <button onClick={() => currentId && loadInstance(currentId)}>重试</button>
+            </div>
+          )}
+          {instance && drift && (
+            <div className="banner banner-notice">
+              剧情规则已有新版本 {drift.latestVersion}，当前存档仍按原版本 {instance.version} 进行。
+              <button onClick={handleReviewMigration} disabled={busy}>
+                查看影响
+              </button>
+            </div>
+          )}
+          {migration && (
+            <MigrationPanel
+              impact={migration}
+              busy={busy}
+              onAdopt={() => handleMigrationDecision("adopt")}
+              onDefer={() => handleMigrationDecision("defer")}
+              onClose={() => setMigration(null)}
+            />
+          )}
+          {!instance && loadError ? null : !instance ? (
             <div className="empty">点击“开始新故事”进入《雾港抉择》。</div>
           ) : (
             <>

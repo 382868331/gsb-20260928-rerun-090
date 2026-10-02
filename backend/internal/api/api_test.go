@@ -98,6 +98,21 @@ func TestListInstancesEmptyFileStore(t *testing.T) {
 	}
 }
 
+func TestFreshInstanceSerialisesEmptyRewards(t *testing.T) {
+	h, _, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/instances", strings.NewReader(`{"id":"fresh"}`))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: %d", w.Code)
+	}
+	// A fresh save must send rewards:[] — clients crash on an undefined
+	// collection when the field is omitted.
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"rewards":[]`)) {
+		t.Fatalf("fresh instance must include an empty rewards array: %s", w.Body.String())
+	}
+}
+
 func TestFullPlayHTTP(t *testing.T) {
 	h, _, _ := newTestServer(t)
 

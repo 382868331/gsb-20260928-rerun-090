@@ -1,5 +1,6 @@
 import type { Instance, StoryDefinition } from "../types";
 import { LogEntryList } from "./StoryLog";
+import { rewardsOf } from "../format";
 
 interface Props {
   base: Instance;
@@ -59,14 +60,14 @@ export function ComparePanel({ base, others, compareId, defs, onSelect, onClose 
         <div className="compare-col">
           <h3>{branchName(base)}</h3>
           <p className="muted">
-            当前节点 <code>{base.current}</code> · 已领奖励 {base.rewards.length} 项
+            当前节点 <code>{base.current}</code> · 已领奖励 {rewardsOf(base).length} 项
           </p>
           <LogEntryList inst={base} def={baseDef} from={prefix} />
         </div>
         <div className="compare-col">
           <h3>{branchName(other)}</h3>
           <p className="muted">
-            当前节点 <code>{other.current}</code> · 已领奖励 {other.rewards.length} 项
+            当前节点 <code>{other.current}</code> · 已领奖励 {rewardsOf(other).length} 项
           </p>
           <LogEntryList inst={other} def={otherDef} from={prefix} />
         </div>

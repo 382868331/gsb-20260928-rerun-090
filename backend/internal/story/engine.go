@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -22,6 +23,7 @@ var (
 	ErrDuplicateChoice   = fmt.Errorf("choice already applied; duplicate submission grants no reward")
 	ErrBadEffect         = fmt.Errorf("invalid effect")
 	ErrEndNode           = fmt.Errorf("story has ended")
+	ErrMigrationBlocked  = fmt.Errorf("migration blocked: progress would be lost")
 )
 
 // claimSep separates visit id and choice in a claim key.
@@ -49,20 +51,29 @@ type AppliedChoice struct {
 
 // Catalog holds story definitions by id. Starting an instance pins the
 // definition version (hash) so later catalogue changes cannot invalidate
-// an in-progress play-through's conditions.
+// an in-progress play-through's conditions. Every definition ever registered
+// is kept in the version history, so saves pinned to a superseded revision
+// keep playing under their original rules until they explicitly migrate.
 type Catalog struct {
 	definitions map[string]*Definition
+	history     map[string]*Definition // defHash -> definition snapshot
+	mu          sync.RWMutex
 }
 
 func NewCatalog(defs ...*Definition) *Catalog {
-	c := &Catalog{definitions: map[string]*Definition{}}
+	c := &Catalog{
+		definitions: map[string]*Definition{},
+		history:     map[string]*Definition{},
+	}
 	for _, d := range defs {
-		c.definitions[d.ID] = d
+		_ = c.Update(d)
 	}
 	return c
 }
 
 func (c *Catalog) Get(id string) (*Definition, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	d, ok := c.definitions[id]
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrUnknownStory, id)
@@ -71,12 +82,41 @@ func (c *Catalog) Get(id string) (*Definition, error) {
 }
 
 func (c *Catalog) List() []*Definition {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	out := make([]*Definition, 0, len(c.definitions))
 	for _, d := range c.definitions {
 		out = append(out, d)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// Update registers a (possibly revised) definition as the story's latest
+// version. The previous revision stays addressable by its hash so pinned
+// instances are unaffected.
+func (c *Catalog) Update(d *Definition) error {
+	if d == nil || d.ID == "" {
+		return fmt.Errorf("definition missing id")
+	}
+	hash, err := DefHash(d)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.definitions[d.ID] = d
+	c.history[hash] = d
+	return nil
+}
+
+// LatestHash returns the hash of the story's current latest definition.
+func (c *Catalog) LatestHash(storyID string) (string, error) {
+	d, err := c.Get(storyID)
+	if err != nil {
+		return "", err
+	}
+	return DefHash(d)
 }
 
 // DefHash is a stable hash of the definition content used as a version pin.
@@ -135,20 +175,23 @@ func (c *Catalog) Start(storyID, instanceID string, initial map[string]interface
 	return inst, d, nil
 }
 
-// pinnedDef resolves the exact definition an instance was started against.
+// pinnedDef resolves the exact definition an instance is pinned to. Any
+// revision ever registered with this catalog remains playable; drift is
+// only reported when the pinned revision is unknown (e.g. the save was
+// created against a different catalogue).
 func (c *Catalog) pinnedDef(inst *Instance) (*Definition, error) {
-	d, err := c.Get(inst.StoryID)
-	if err != nil {
-		return nil, err
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if d, ok := c.history[inst.DefHash]; ok {
+		return d, nil
 	}
-	hash, err := DefHash(d)
-	if err != nil {
-		return nil, err
+	latest := "none"
+	if d, ok := c.definitions[inst.StoryID]; ok {
+		if hash, err := DefHash(d); err == nil {
+			latest = hash
+		}
 	}
-	if hash != inst.DefHash {
-		return nil, fmt.Errorf("%w: story %s is now %s, instance pinned at %s", ErrStoryVersionDrift, inst.StoryID, hash, inst.DefHash)
-	}
-	return d, nil
+	return nil, fmt.Errorf("%w: story %s is now %s, instance pinned at %s", ErrStoryVersionDrift, inst.StoryID, latest, inst.DefHash)
 }
 
 // View renders the current node and only the choices whose conditions hold

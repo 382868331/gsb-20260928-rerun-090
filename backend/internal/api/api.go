@@ -28,16 +28,40 @@ func NewHandler(catalog *story.Catalog, store story.Store, initial map[string]in
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/stories", h.listStories)
 	mux.HandleFunc("GET /api/stories/{id}", h.getStory)
+	mux.HandleFunc("PUT /api/stories/{id}", h.updateStory)
 	mux.HandleFunc("POST /api/instances", h.createInstance)
 	mux.HandleFunc("GET /api/instances/{id}", h.getInstance)
 	mux.HandleFunc("POST /api/instances/{id}/choices", h.applyChoice)
 	mux.HandleFunc("POST /api/instances/{id}/forks", h.forkInstance)
+	mux.HandleFunc("GET /api/instances/{id}/migration", h.previewMigration)
+	mux.HandleFunc("POST /api/instances/{id}/migration", h.decideMigration)
 	mux.HandleFunc("GET /api/instances", h.listInstances)
 }
 
 type instanceResponse struct {
 	Instance *story.Instance `json:"instance"`
 	View     story.NodeView  `json:"view"`
+	// VersionDrift is true when the author published a newer story revision
+	// than the one this save is pinned to. The save keeps playing under its
+	// pinned rules until it explicitly adopts the new ones.
+	VersionDrift  bool   `json:"versionDrift,omitempty"`
+	LatestVersion string `json:"latestVersion,omitempty"`
+	LatestDefHash string `json:"latestDefHash,omitempty"`
+}
+
+// decorate annotates the response with rule-revision drift information.
+func (h *Handler) decorate(resp *instanceResponse, inst *story.Instance) {
+	d, err := h.catalog.Get(inst.StoryID)
+	if err != nil {
+		return
+	}
+	hash, err := story.DefHash(d)
+	if err != nil || hash == inst.DefHash {
+		return
+	}
+	resp.VersionDrift = true
+	resp.LatestVersion = d.Version
+	resp.LatestDefHash = hash
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -60,6 +84,8 @@ func writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, story.ErrDuplicateChoice):
 		status = http.StatusConflict
 	case errors.Is(err, story.ErrStoryVersionDrift):
+		status = http.StatusConflict
+	case errors.Is(err, story.ErrMigrationBlocked):
 		status = http.StatusConflict
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
@@ -90,6 +116,37 @@ func (h *Handler) getStory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+// updateStory lets an author publish a revised definition. Existing saves
+// stay pinned to their original revision; the previous revision remains
+// playable through the catalog's version history.
+func (h *Handler) updateStory(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var def story.Definition
+	if err := json.NewDecoder(r.Body).Decode(&def); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	if def.ID == "" {
+		def.ID = id
+	}
+	if def.ID != id {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "definition id does not match path"})
+		return
+	}
+	if err := story.ValidateDefinition(&def); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := h.catalog.Update(&def); err != nil {
+		writeError(w, err)
+		return
+	}
+	hash, _ := story.DefHash(&def)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"id": def.ID, "title": def.Title, "version": def.Version, "defHash": hash,
+	})
 }
 
 type createRequest struct {
@@ -149,7 +206,81 @@ func (h *Handler) getInstance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, instanceResponse{Instance: inst, View: view})
+	resp := instanceResponse{Instance: inst, View: view}
+	h.decorate(&resp, inst)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) previewMigration(w http.ResponseWriter, r *http.Request) {
+	inst, err := h.store.Load(r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	impact, err := h.catalog.PreviewMigration(inst)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"migration": impact})
+}
+
+type migrationRequest struct {
+	Action string `json:"action"` // adopt | defer
+}
+
+// decideMigration records the author's per-save decision about a revised
+// story definition. "adopt" re-pins this save only; "defer" keeps the old
+// rules. Both are idempotent and neither rewrites happened events.
+func (h *Handler) decideMigration(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	unlock := h.lockInstance(id)
+	defer unlock()
+	inst, err := h.store.Load(id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var req migrationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	var impact *story.MigrationImpact
+	switch req.Action {
+	case "adopt":
+		impact, err = h.catalog.AdoptMigration(inst)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+	case "defer":
+		if err := h.catalog.DeferMigration(inst); err != nil {
+			writeError(w, err)
+			return
+		}
+		impact, _ = h.catalog.PreviewMigration(inst)
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action must be adopt or defer"})
+		return
+	}
+	if err := h.store.Save(inst); err != nil {
+		writeError(w, err)
+		return
+	}
+	view, err := h.catalog.View(inst)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	resp := instanceResponse{Instance: inst, View: view}
+	h.decorate(&resp, inst)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"migration":    impact,
+		"instance":     resp.Instance,
+		"view":         resp.View,
+		"versionDrift": resp.VersionDrift,
+	})
 }
 
 type choiceRequest struct {

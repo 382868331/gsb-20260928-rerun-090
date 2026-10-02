@@ -1,10 +1,11 @@
 import type { Instance, Reward, StoryDefinition } from "../types";
-import { describeReward } from "../format";
+import { describeReward, rewardsOf } from "../format";
 
 export interface LogStep {
   nodeId: string;
   nodeText?: string;
   choiceText?: string;
+  note?: string;
   rewards: Reward[];
   at: string;
 }
@@ -24,7 +25,7 @@ export function buildSteps(inst: Instance, def?: StoryDefinition): LogStep[] {
       choiceText = choice ? choice.text : entry.choiceId;
     }
     const rewards = entry.choiceId
-      ? inst.rewards.filter(
+      ? rewardsOf(inst).filter(
           (r) => r.choiceId === entry.choiceId && r.node === prevId,
         )
       : [];
@@ -32,6 +33,7 @@ export function buildSteps(inst: Instance, def?: StoryDefinition): LogStep[] {
       nodeId: entry.node,
       nodeText: node?.text,
       choiceText,
+      note: entry.note,
       rewards,
       at: entry.at,
     };
@@ -61,6 +63,7 @@ export function LogEntryList({ inst, def, from = 0, to }: ListProps) {
           {step.choiceText && (
             <div className="log-choice">选择：{step.choiceText}</div>
           )}
+          {step.note && <div className="log-note">{step.note}</div>}
           {step.rewards.map((r, j) => (
             <div className="log-reward" key={j}>
               奖励：{describeReward(r)}

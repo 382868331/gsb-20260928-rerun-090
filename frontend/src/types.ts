@@ -76,7 +76,8 @@ export interface Instance {
   parentId?: string;
   rootId?: string;
   label?: string;
-  log: { node: string; choiceId?: string; at: string }[];
+  migrationDeferred?: string;
+  log: { node: string; choiceId?: string; note?: string; at: string }[];
   createdAt?: string;
   updatedAt?: string;
 }
@@ -84,6 +85,45 @@ export interface Instance {
 export interface InstanceResponse {
   instance: Instance;
   view: NodeView;
+  versionDrift?: boolean;
+  latestVersion?: string;
+  latestDefHash?: string;
+}
+
+export interface EventImpact {
+  node: string;
+  choiceId?: string;
+  status: "unchanged" | "revised" | "removed";
+  detail?: string;
+}
+
+export interface ChoiceImpact {
+  choiceId: string;
+  text: string;
+  change:
+    | "added"
+    | "removed"
+    | "condition-changed"
+    | "reward-changed"
+    | "target-changed"
+    | "unchanged";
+}
+
+export interface MigrationImpact {
+  storyId: string;
+  fromVersion: string;
+  toVersion: string;
+  fromHash: string;
+  toHash: string;
+  upToDate: boolean;
+  currentNode: string;
+  currentNodeMissing: boolean;
+  completed: EventImpact[];
+  future: ChoiceImpact[];
+}
+
+export interface MigrationResponse extends InstanceResponse {
+  migration: MigrationImpact;
 }
 
 export interface AppliedResponse extends InstanceResponse {

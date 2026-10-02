@@ -1,5 +1,11 @@
 import type { Instance, Reward } from "./types";
 
+// rewardsOf tolerates payloads from older backends that omitted the
+// collection entirely; an absent list must never blank the page.
+export function rewardsOf(inst: Instance): Reward[] {
+  return inst.rewards ?? [];
+}
+
 export function factsEntries(inst: Instance): [string, string][] {
   const out: [string, string][] = [];
   for (const [key, value] of Object.entries(inst.facts)) {
