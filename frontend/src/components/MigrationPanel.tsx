@@ -1,10 +1,13 @@
-import type { MigrationImpact } from "../types";
+import type { MigrationImpact, MigrationState } from "../types";
 
 interface Props {
   impact: MigrationImpact;
+  state?: MigrationState | null;
+  recovery?: boolean;
   busy: boolean;
   onAdopt: () => void;
   onDefer: () => void;
+  onRecover: () => void;
   onClose: () => void;
 }
 
@@ -26,13 +29,20 @@ const CHOICE_CHANGE: Record<string, string> = {
 // MigrationPanel is the per-save review shown before a branch adopts a
 // revised story definition: which completed events stay as they are and
 // which future choices would change.
-export function MigrationPanel({ impact, busy, onAdopt, onDefer, onClose }: Props) {
+export function MigrationPanel({ impact, state, recovery, busy, onAdopt, onDefer, onRecover, onClose }: Props) {
   return (
     <section className="card migration" data-testid="migration-panel">
       <div className="migration-head">
         <h2>规则修订影响审查</h2>
         <button onClick={onClose}>关闭</button>
       </div>
+      {recovery && state && (
+        <div className="banner banner-notice" data-testid="migration-recovery">
+          上次采用 <code>{state.fromVersion}</code> → <code>{state.toVersion}</code>
+          的过程中断。下方展示实际保留下来的规则、采用记录与已发生事件；
+          核对后可继续完成采用，或保留原版本。重复恢复不会重复发放奖励。
+        </div>
+      )}
       <p className="muted">
         版本 <code>{impact.fromVersion}</code> → <code>{impact.toVersion}</code>
         ，仅影响当前存档；其他分支继续原版本。
@@ -79,9 +89,15 @@ export function MigrationPanel({ impact, busy, onAdopt, onDefer, onClose }: Prop
         采用后：已领取的奖励不会重新发放；尚未采用的修改可随时再评估，重复确认或撤回都不会改变已发生事件。
       </p>
       <div className="migration-actions">
-        <button onClick={onAdopt} disabled={busy || impact.currentNodeMissing}>
-          采用新规则（仅此分支）
-        </button>
+        {recovery ? (
+          <button onClick={onRecover} disabled={busy || impact.currentNodeMissing}>
+            核对无误，完成恢复采用
+          </button>
+        ) : (
+          <button onClick={onAdopt} disabled={busy || impact.currentNodeMissing}>
+            采用新规则（仅此分支）
+          </button>
+        )}
         <button onClick={onDefer} disabled={busy}>
           暂不采用，保留原版本
         </button>
@@ -89,4 +105,3 @@ export function MigrationPanel({ impact, busy, onAdopt, onDefer, onClose }: Prop
     </section>
   );
 }
-

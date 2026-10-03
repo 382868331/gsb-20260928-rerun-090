@@ -24,6 +24,9 @@ var (
 	ErrBadEffect         = fmt.Errorf("invalid effect")
 	ErrEndNode           = fmt.Errorf("story has ended")
 	ErrMigrationBlocked  = fmt.Errorf("migration blocked: progress would be lost")
+	ErrUnknownRevision   = fmt.Errorf("unknown story revision")
+	ErrRevisionInUse     = fmt.Errorf("revision is still referenced and cannot be withdrawn")
+	ErrNoPendingRecovery = fmt.Errorf("no interrupted adoption to recover")
 )
 
 // claimSep separates visit id and choice in a claim key.
@@ -57,6 +60,9 @@ type AppliedChoice struct {
 type Catalog struct {
 	definitions map[string]*Definition
 	history     map[string]*Definition // defHash -> definition snapshot
+	latest      map[string]string      // storyID -> defHash of the latest revision
+	revMeta     map[string]StoredRevision
+	defStore    DefinitionStore
 	mu          sync.RWMutex
 }
 
@@ -64,11 +70,22 @@ func NewCatalog(defs ...*Definition) *Catalog {
 	c := &Catalog{
 		definitions: map[string]*Definition{},
 		history:     map[string]*Definition{},
+		latest:      map[string]string{},
+		revMeta:     map[string]StoredRevision{},
 	}
 	for _, d := range defs {
 		_ = c.Update(d)
 	}
 	return c
+}
+
+// AttachStore persists every subsequently published revision so the
+// catalogue's version history — including revisions saves have adopted —
+// survives a restart.
+func (c *Catalog) AttachStore(s DefinitionStore) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.defStore = s
 }
 
 func (c *Catalog) Get(id string) (*Definition, error) {
@@ -105,8 +122,98 @@ func (c *Catalog) Update(d *Definition) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.updateLocked(d, hash, true)
+}
+
+// updateLocked registers a revision; persist controls whether it is written
+// through to the attached definition store.
+func (c *Catalog) updateLocked(d *Definition, hash string, persist bool) error {
+	if prev, ok := c.latest[d.ID]; ok {
+		if meta, ok := c.revMeta[prev]; ok {
+			meta.Latest = false
+			c.revMeta[prev] = meta
+			if persist && c.defStore != nil {
+				if err := c.defStore.SaveRevision(meta); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	c.definitions[d.ID] = d
 	c.history[hash] = d
+	c.latest[d.ID] = hash
+	rev := StoredRevision{
+		StoryID:     d.ID,
+		Hash:        hash,
+		Version:     d.Version,
+		Definition:  d,
+		PublishedAt: nowUTC(),
+		Latest:      true,
+	}
+	c.revMeta[hash] = rev
+	if persist && c.defStore != nil {
+		if err := c.defStore.SaveRevision(rev); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RestoreRevision re-registers a persisted revision at startup without
+// writing it back. Latest pointers rebuild the per-story current definition;
+// every other revision stays addressable by hash so saves pinned to it —
+// including saves that adopted it — resume under their own rules.
+func (c *Catalog) RestoreRevision(rev StoredRevision) error {
+	if rev.Definition == nil || rev.StoryID == "" || rev.Hash == "" {
+		return fmt.Errorf("stored revision missing story id, hash or definition")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.history[rev.Hash] = rev.Definition
+	c.revMeta[rev.Hash] = rev
+	if rev.Latest {
+		c.definitions[rev.StoryID] = rev.Definition
+		c.latest[rev.StoryID] = rev.Hash
+	}
+	return nil
+}
+
+// Revisions lists every known revision of a story, oldest first, so authors
+// can see which versions exist and which one is current.
+func (c *Catalog) Revisions(storyID string) []StoredRevision {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]StoredRevision, 0, len(c.revMeta))
+	for _, rev := range c.revMeta {
+		if rev.StoryID == storyID {
+			out = append(out, rev)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].PublishedAt < out[j].PublishedAt })
+	return out
+}
+
+// Withdraw removes a revision that no save references. The latest revision
+// cannot be withdrawn (it is the version new saves start on), and callers
+// must ensure no instance pins or is adopting the hash — a revision still
+// referenced by historical events stays readable so old branches keep their
+// rules.
+func (c *Catalog) Withdraw(storyID, hash string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.history[hash]; !ok {
+		return fmt.Errorf("%w: %s", ErrUnknownRevision, hash)
+	}
+	if c.latest[storyID] == hash {
+		return fmt.Errorf("%w: revision %s is the latest published version of story %s", ErrRevisionInUse, hash, storyID)
+	}
+	delete(c.history, hash)
+	delete(c.revMeta, hash)
+	if c.defStore != nil {
+		if err := c.defStore.DeleteRevision(hash); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -389,29 +496,39 @@ func Fork(parent *Instance, branchID, label string) *Instance {
 	parent.Branches[branchID] = BranchInfo{ID: branchID, Label: label, Node: parent.Current, CreatedAt: now}
 	parent.UpdatedAt = now
 	forked := &Instance{
-		ID:        branchID,
-		StoryID:   parent.StoryID,
-		Version:   parent.Version,
-		DefHash:   parent.DefHash,
-		Current:   parent.Current,
-		Facts:     cloneFacts(parent.Facts),
-		Claimed:   append([]string{}, parent.Claimed...),
-		Rewards:   append([]Reward{}, parent.Rewards...),
-		Branches:  map[string]BranchInfo{},
-		VisitID:   parent.VisitID,
-		Rev:       parent.Rev,
-		Decisions: cloneDecisions(parent.Decisions),
-		Log:       append([]LogEntry{}, parent.Log...),
-		ParentID:  parent.ID,
-		RootID:    parent.RootID,
-		Label:     label,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:                branchID,
+		StoryID:           parent.StoryID,
+		Version:           parent.Version,
+		DefHash:           parent.DefHash,
+		Current:           parent.Current,
+		Facts:             cloneFacts(parent.Facts),
+		Claimed:           append([]string{}, parent.Claimed...),
+		Rewards:           append([]Reward{}, parent.Rewards...),
+		Branches:          map[string]BranchInfo{},
+		VisitID:           parent.VisitID,
+		Rev:               parent.Rev,
+		Decisions:         cloneDecisions(parent.Decisions),
+		Log:               append([]LogEntry{}, parent.Log...),
+		Migration:         cloneMigration(parent.Migration),
+		MigrationDeferred: parent.MigrationDeferred,
+		ParentID:          parent.ID,
+		RootID:            parent.RootID,
+		Label:             label,
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 	if forked.RootID == "" {
 		forked.RootID = parent.ID
 	}
 	return forked
+}
+
+func cloneMigration(in *MigrationState) *MigrationState {
+	if in == nil {
+		return nil
+	}
+	cp := *in
+	return &cp
 }
 
 func cloneDecisions(in map[string]IdemRecord) map[string]IdemRecord {

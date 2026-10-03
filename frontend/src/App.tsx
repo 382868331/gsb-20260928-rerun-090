@@ -4,6 +4,7 @@ import type {
   Instance,
   InstanceResponse,
   MigrationImpact,
+  MigrationState,
   NodeView,
   StoryDefinition,
 } from "./types";
@@ -41,6 +42,8 @@ export function App() {
   const [compareId, setCompareId] = useState<string | null>(null);
   const [drift, setDrift] = useState<{ latestVersion: string; latestDefHash: string } | null>(null);
   const [migration, setMigration] = useState<MigrationImpact | null>(null);
+  const [migrationState, setMigrationState] = useState<MigrationState | null>(null);
+  const [recovery, setRecovery] = useState(false);
 
   const refreshList = useCallback(async () => {
     try {
@@ -65,6 +68,8 @@ export function App() {
       setError(null);
       setLoadError(null);
       setMigration(null);
+      setMigrationState(null);
+      setRecovery(false);
       setDrift(
         res.versionDrift && res.latestDefHash
           ? { latestVersion: res.latestVersion ?? "", latestDefHash: res.latestDefHash }
@@ -100,6 +105,8 @@ export function App() {
     setInstance(res.instance);
     setView(res.view);
     setMigration(null);
+    setMigrationState(null);
+    setRecovery(false);
     setDrift(
       res.versionDrift && res.latestDefHash
         ? { latestVersion: res.latestVersion ?? "", latestDefHash: res.latestDefHash }
@@ -174,8 +181,10 @@ export function App() {
     setBusy(true);
     setError(null);
     try {
-      const { migration } = await getMigration(currentId);
+      const { migration, state, recovery } = await getMigration(currentId);
       setMigration(migration);
+      setMigrationState(state ?? null);
+      setRecovery(recovery === true);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -183,7 +192,7 @@ export function App() {
     }
   };
 
-  const handleMigrationDecision = async (action: "adopt" | "defer") => {
+  const handleMigrationDecision = async (action: "adopt" | "defer" | "recover") => {
     if (!currentId || busy) return;
     setBusy(true);
     setError(null);
@@ -192,7 +201,9 @@ export function App() {
       const res = await decideMigration(currentId, action);
       applyResponse(res);
       setNotice(
-        action === "adopt"
+        action === "recover"
+          ? "已恢复中断的采用：此前事件保持原样，此后选择按新规则求值。"
+          : action === "adopt"
           ? "已采用新规则：此前事件保持原样，此后选择按新规则求值。"
           : "已保留原版本，已发生事件不受影响；可随时重新评估。",
       );
@@ -263,12 +274,24 @@ export function App() {
               </button>
             </div>
           )}
+          {instance?.migration?.status === "adopting" && (
+            <div className="banner banner-notice" data-testid="recovery-banner">
+              该分支的规则采用（{instance.migration.fromVersion} → {instance.migration.toVersion}）
+              曾中断，需要核对恢复。
+              <button onClick={handleReviewMigration} disabled={busy}>
+                核对并恢复
+              </button>
+            </div>
+          )}
           {migration && (
             <MigrationPanel
               impact={migration}
+              state={migrationState}
+              recovery={recovery}
               busy={busy}
               onAdopt={() => handleMigrationDecision("adopt")}
               onDefer={() => handleMigrationDecision("defer")}
+              onRecover={() => handleMigrationDecision("recover")}
               onClose={() => setMigration(null)}
             />
           )}

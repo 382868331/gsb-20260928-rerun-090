@@ -121,6 +121,10 @@ code { background: #0f1320; padding: 1px 6px; border-radius: 4px; }
 .migration .tag { background: #2a3550; color: #b3d0ff; padding: 2px 8px; border-radius: 6px; font-size: 12px; margin-left: 6px; }
 .migration .tag-revised { background: #4a3220; color: #f0b070; }
 .migration .tag-removed { background: #43212a; color: #ffb3c0; }
+.branch-list .tag { background: #2a3550; color: #b3d0ff; padding: 2px 8px; border-radius: 6px; font-size: 12px; margin-left: 6px; }
+.branch-list .tag-recovery { background: #43212a; color: #ffb3c0; }
+.branch-list .tag-adopted { background: #1f3a2a; color: #9fe6b8; }
+.branch-list .tag-deferred { background: #333; color: #aaa; }
 .migration-actions { display: flex; gap: 10px; margin-top: 12px; }
 .migration-head { display: flex; justify-content: space-between; align-items: center; }
 

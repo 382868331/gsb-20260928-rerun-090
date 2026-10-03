@@ -29,6 +29,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/stories", h.listStories)
 	mux.HandleFunc("GET /api/stories/{id}", h.getStory)
 	mux.HandleFunc("PUT /api/stories/{id}", h.updateStory)
+	mux.HandleFunc("GET /api/stories/{id}/revisions", h.listRevisions)
+	mux.HandleFunc("DELETE /api/stories/{id}/revisions/{hash}", h.withdrawRevision)
 	mux.HandleFunc("POST /api/instances", h.createInstance)
 	mux.HandleFunc("GET /api/instances/{id}", h.getInstance)
 	mux.HandleFunc("POST /api/instances/{id}/choices", h.applyChoice)
@@ -87,6 +89,12 @@ func writeError(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	case errors.Is(err, story.ErrMigrationBlocked):
 		status = http.StatusConflict
+	case errors.Is(err, story.ErrUnknownRevision):
+		status = http.StatusNotFound
+	case errors.Is(err, story.ErrRevisionInUse):
+		status = http.StatusConflict
+	case errors.Is(err, story.ErrNoPendingRecovery):
+		status = http.StatusConflict
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
@@ -116,6 +124,54 @@ func (h *Handler) getStory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+// listRevisions shows every published revision of a story and which one is
+// current, so authors can see what saves may still be pinned to.
+func (h *Handler) listRevisions(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := h.catalog.Get(id); err != nil {
+		writeError(w, err)
+		return
+	}
+	revs := h.catalog.Revisions(id)
+	out := make([]map[string]interface{}, 0, len(revs))
+	for _, rev := range revs {
+		out = append(out, map[string]interface{}{
+			"hash": rev.Hash, "version": rev.Version,
+			"publishedAt": rev.PublishedAt, "latest": rev.Latest,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"revisions": out})
+}
+
+// withdrawRevision removes a revision nobody has adopted. A revision still
+// referenced by any save — pinned to it or mid-adoption — stays readable so
+// old branches keep their rules; the latest revision cannot be withdrawn
+// either.
+func (h *Handler) withdrawRevision(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	hash := r.PathValue("hash")
+	insts, err := h.store.List()
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	for _, inst := range insts {
+		if inst.DefHash == hash {
+			writeError(w, fmt.Errorf("%w: save %s still plays under revision %s", story.ErrRevisionInUse, inst.ID, hash))
+			return
+		}
+		if inst.Migration != nil && inst.Migration.ToHash == hash && inst.Migration.Status == story.MigrationAdopting {
+			writeError(w, fmt.Errorf("%w: save %s is adopting revision %s", story.ErrRevisionInUse, inst.ID, hash))
+			return
+		}
+	}
+	if err := h.catalog.Withdraw(id, hash); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"withdrawn": hash})
 }
 
 // updateStory lets an author publish a revised definition. Existing saves
@@ -203,7 +259,17 @@ func (h *Handler) getInstance(w http.ResponseWriter, r *http.Request) {
 	}
 	view, err := h.catalog.View(inst)
 	if err != nil {
-		writeError(w, err)
+		// A save whose pinned revision cannot be resolved must still show
+		// what it kept — the save itself and the exact missing hash — so
+		// the player sees a specific reason and a recovery entry, not a
+		// generic read failure.
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":    err.Error(),
+			"instance": inst,
+			"state":    inst.Migration,
+		})
 		return
 	}
 	resp := instanceResponse{Instance: inst, View: view}
@@ -222,16 +288,23 @@ func (h *Handler) previewMigration(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"migration": impact})
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"migration": impact,
+		"state":     inst.Migration,
+		"recovery":  story.NeedsRecovery(inst),
+	})
 }
 
 type migrationRequest struct {
-	Action string `json:"action"` // adopt | defer
+	Action string `json:"action"` // adopt | defer | recover
 }
 
 // decideMigration records the author's per-save decision about a revised
-// story definition. "adopt" re-pins this save only; "defer" keeps the old
-// rules. Both are idempotent and neither rewrites happened events.
+// story definition. "adopt" re-pins this save only — the decision is saved
+// before the transition completes, so an interruption reloads as a
+// recoverable state instead of a version mismatch. "recover" finishes an
+// interrupted adoption (idempotently), "defer" keeps the old rules and also
+// abandons any interrupted adoption. None of them rewrites happened events.
 func (h *Handler) decideMigration(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	unlock := h.lockInstance(id)
@@ -249,19 +322,48 @@ func (h *Handler) decideMigration(w http.ResponseWriter, r *http.Request) {
 	var impact *story.MigrationImpact
 	switch req.Action {
 	case "adopt":
-		impact, err = h.catalog.AdoptMigration(inst)
+		if story.NeedsRecovery(inst) {
+			// Already decided: finish the interrupted adoption.
+			err = h.catalog.CompleteAdoption(inst)
+		} else {
+			impact, err = h.catalog.BeginAdoption(inst)
+			if err == nil && !impact.UpToDate {
+				// Persist the adoption decision with the save before
+				// applying it, so a crash in between recovers cleanly.
+				if saveErr := h.store.Save(inst); saveErr != nil {
+					writeError(w, saveErr)
+					return
+				}
+				err = h.catalog.CompleteAdoption(inst)
+			}
+		}
 		if err != nil {
 			writeError(w, err)
 			return
 		}
+		if impact == nil {
+			impact, _ = h.catalog.PreviewMigration(inst)
+		}
+	case "recover":
+		if err := h.catalog.CompleteAdoption(inst); err != nil {
+			writeError(w, err)
+			return
+		}
+		impact, _ = h.catalog.PreviewMigration(inst)
 	case "defer":
+		if story.NeedsRecovery(inst) {
+			if err := h.catalog.AbortAdoption(inst); err != nil {
+				writeError(w, err)
+				return
+			}
+		}
 		if err := h.catalog.DeferMigration(inst); err != nil {
 			writeError(w, err)
 			return
 		}
 		impact, _ = h.catalog.PreviewMigration(inst)
 	default:
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action must be adopt or defer"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action must be adopt, defer or recover"})
 		return
 	}
 	if err := h.store.Save(inst); err != nil {
@@ -277,6 +379,7 @@ func (h *Handler) decideMigration(w http.ResponseWriter, r *http.Request) {
 	h.decorate(&resp, inst)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"migration":    impact,
+		"state":        inst.Migration,
 		"instance":     resp.Instance,
 		"view":         resp.View,
 		"versionDrift": resp.VersionDrift,

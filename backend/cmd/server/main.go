@@ -32,7 +32,28 @@ func main() {
 	if err != nil {
 		log.Fatalf("open data dir: %v", err)
 	}
-	catalog := story.NewCatalog(seed.Story())
+	defStore, err := story.NewFileDefinitionStore(filepath.Join(dataDir, "definitions"))
+	if err != nil {
+		log.Fatalf("open definitions dir: %v", err)
+	}
+	catalog := story.NewCatalog()
+	catalog.AttachStore(defStore)
+	// Restore every published revision so saves that adopted a revised
+	// rule set find their pinned definition after a restart.
+	revs, err := defStore.Revisions()
+	if err != nil {
+		log.Fatalf("load revisions: %v", err)
+	}
+	for _, rev := range revs {
+		if err := catalog.RestoreRevision(rev); err != nil {
+			log.Fatalf("restore revision %s: %v", rev.Hash, err)
+		}
+	}
+	if len(catalog.List()) == 0 {
+		if err := catalog.Update(seed.Story()); err != nil {
+			log.Fatalf("seed story: %v", err)
+		}
+	}
 	h := api.NewHandler(catalog, store, seed.InitialFacts())
 	mux := http.NewServeMux()
 	h.Register(mux)

@@ -57,6 +57,18 @@ npm run dev
   规则中已移除时迁移被拒绝（409），进度不会静默跳回默认位置。采用后日志
   追加一条边界说明，重开存档可逐步复盘新旧规则交界；重复确认或撤回均
   为幂等操作，不改变已发生事件。
+- 已发布的规则修订与存档的采用决定一同落盘（`data/definitions/` 每修订
+  一个文件）：关闭服务再重开时，已采用新规则的存档仍按所采用的版本继续，
+  不会报版本不匹配，也不会退回初始规则。采用分两阶段持久化——先记录
+  `adopting` 决定再完成切换——采用过程中断的存档重开后处于「待恢复」
+  状态：`GET /api/instances/{id}/migration` 返回 `recovery=true` 与采用
+  记录、保留的规则和已发生事件，`POST .../migration {"action":"recover"}`
+  完成恢复；重复恢复是幂等空操作，不重复发放奖励、不重复写迁移边界。
+  分支列表按「未采用 / 已采用 / 待恢复」标注每个分支的规则状态。
+- 作者可撤回尚无人采用的修订：`DELETE /api/stories/{id}/revisions/{hash}`。
+  最新版本、被任何存档固定或正在采用的修订不可撤回（409），仍被历史事件
+  引用的规则保持可读取，旧分支不会失去依据；
+  `GET /api/stories/{id}/revisions` 列出全部版本及当前版本。
 
 ## HTTP API
 
@@ -65,13 +77,15 @@ npm run dev
 | GET | `/api/stories` | 剧情列表（含版本哈希） |
 | GET | `/api/stories/{id}` | 剧情定义 |
 | PUT | `/api/stories/{id}` | 作者发布修订定义（旧版本保留可玩） |
+| GET | `/api/stories/{id}/revisions` | 列出全部已发布修订及当前版本 |
+| DELETE | `/api/stories/{id}/revisions/{hash}` | 撤回无人采用的修订 |
 | POST | `/api/instances` | 开始新故事 |
 | GET | `/api/instances` | 存档与分支列表 |
 | GET | `/api/instances/{id}` | 继续：当前节点 + 允许的选项 |
 | POST | `/api/instances/{id}/choices` | 提交选择 `{choiceId, idempotencyKey}` |
 | POST | `/api/instances/{id}/forks` | 建立试演分支 `{label}` |
 | GET | `/api/instances/{id}/migration` | 预览规则修订对该存档的影响 |
-| POST | `/api/instances/{id}/migration` | 迁移决定 `{action: adopt\|defer}` |
+| POST | `/api/instances/{id}/migration` | 迁移决定 `{action: adopt\|defer\|recover}` |
 
 ## 测试
 

@@ -77,9 +77,19 @@ export interface Instance {
   rootId?: string;
   label?: string;
   migrationDeferred?: string;
+  migration?: MigrationState;
   log: { node: string; choiceId?: string; note?: string; at: string }[];
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface MigrationState {
+  status: "adopting" | "adopted";
+  fromHash: string;
+  toHash: string;
+  fromVersion: string;
+  toVersion: string;
+  updatedAt: string;
 }
 
 export interface InstanceResponse {
@@ -124,6 +134,13 @@ export interface MigrationImpact {
 
 export interface MigrationResponse extends InstanceResponse {
   migration: MigrationImpact;
+  state?: MigrationState | null;
+}
+
+export interface MigrationPreview {
+  migration: MigrationImpact;
+  state?: MigrationState | null;
+  recovery?: boolean;
 }
 
 export interface AppliedResponse extends InstanceResponse {

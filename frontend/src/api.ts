@@ -1,7 +1,7 @@
 import type {
   AppliedResponse,
   InstanceResponse,
-  MigrationImpact,
+  MigrationPreview,
   MigrationResponse,
   StoryDefinition,
 } from "./types";
@@ -79,13 +79,13 @@ export function forkInstance(
   });
 }
 
-export function getMigration(id: string): Promise<{ migration: MigrationImpact }> {
+export function getMigration(id: string): Promise<MigrationPreview> {
   return request(`/api/instances/${encodeURIComponent(id)}/migration`);
 }
 
 export function decideMigration(
   id: string,
-  action: "adopt" | "defer",
+  action: "adopt" | "defer" | "recover",
 ): Promise<MigrationResponse> {
   return request(`/api/instances/${encodeURIComponent(id)}/migration`, {
     method: "POST",

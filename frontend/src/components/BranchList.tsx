@@ -6,6 +6,42 @@ interface Props {
   onSelect: (id: string) => void;
 }
 
+// migrationTag distinguishes, per branch: not yet adopted, adopted, and
+// interrupted adoption awaiting recovery.
+function migrationTag(i: Instance): { text: string; cls: string } | null {
+  if (i.migration?.status === "adopting") {
+    return { text: "采用中断 · 待恢复", cls: "tag-recovery" };
+  }
+  if (i.migration?.status === "adopted") {
+    return { text: "已采用新规则", cls: "tag-adopted" };
+  }
+  if (i.migrationDeferred) {
+    return { text: "保留原版本", cls: "tag-deferred" };
+  }
+  return null;
+}
+
+function BranchButton({ inst, currentId, onSelect, label, title }: {
+  inst: Instance;
+  currentId: string | null;
+  onSelect: (id: string) => void;
+  label: string;
+  title?: string;
+}) {
+  const tag = migrationTag(inst);
+  return (
+    <button
+      className={"branch-item " + (currentId === inst.id ? "active" : "")}
+      onClick={() => onSelect(inst.id)}
+      title={title}
+    >
+      <span className="branch-label">{label}</span>
+      <span className="branch-node">{inst.current}</span>
+      {tag && <span className={"tag " + tag.cls}>{tag.text}</span>}
+    </button>
+  );
+}
+
 export function BranchList({ instances, currentId, onSelect }: Props) {
   const roots = instances.filter((i) => !i.parentId);
   const childrenOf = (rootId: string) =>
@@ -17,26 +53,22 @@ export function BranchList({ instances, currentId, onSelect }: Props) {
       <ul>
         {roots.map((root) => (
           <li key={root.id}>
-            <button
-              className={"branch-item " + (currentId === root.id ? "active" : "")}
-              onClick={() => onSelect(root.id)}
-            >
-              <span className="branch-label">
-                主线{root.label ? " · " + root.label : ""}
-              </span>
-              <span className="branch-node">{root.current}</span>
-            </button>
+            <BranchButton
+              inst={root}
+              currentId={currentId}
+              onSelect={onSelect}
+              label={"主线" + (root.label ? " · " + root.label : "")}
+            />
             <ul className="subbranches">
               {childrenOf(root.id).map((b) => (
                 <li key={b.id}>
-                  <button
-                    className={"branch-item " + (currentId === b.id ? "active" : "")}
-                    onClick={() => onSelect(b.id)}
+                  <BranchButton
+                    inst={b}
+                    currentId={currentId}
+                    onSelect={onSelect}
+                    label={"⎇ " + (b.label || b.id)}
                     title={"从 " + b.parentId + " 分出"}
-                  >
-                    <span className="branch-label">{"⎇ " + (b.label || b.id)}</span>
-                    <span className="branch-node">{b.current}</span>
-                  </button>
+                  />
                 </li>
               ))}
             </ul>

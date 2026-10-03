@@ -64,8 +64,33 @@ type Instance struct {
 	// this save explicitly declined to adopt; the save keeps playing under
 	// its pinned rules. Purely a marker: setting it never touches events.
 	MigrationDeferred string `json:"migrationDeferred,omitempty"`
-	CreatedAt         string `json:"createdAt"`
-	UpdatedAt         string `json:"updatedAt"`
+	// Migration records this branch's adoption of a revised definition.
+	// It is persisted with the save so a restart can tell apart "not yet
+	// adopted", "adopted" and "interrupted, needs recovery".
+	Migration *MigrationState `json:"migration,omitempty"`
+	CreatedAt string          `json:"createdAt"`
+	UpdatedAt string          `json:"updatedAt"`
+}
+
+// Adoption lifecycle statuses recorded on an instance.
+const (
+	// MigrationAdopting means the branch decided to adopt but the
+	// transition did not finish (e.g. the process stopped in between).
+	// The save needs recovery: review what was kept, then complete or
+	// stay on the old version.
+	MigrationAdopting = "adopting"
+	// MigrationAdopted means the branch fully re-pinned to ToHash.
+	MigrationAdopted = "adopted"
+)
+
+// MigrationState is the persisted adoption decision of one branch.
+type MigrationState struct {
+	Status      string `json:"status"` // adopting | adopted
+	FromHash    string `json:"fromHash"`
+	ToHash      string `json:"toHash"`
+	FromVersion string `json:"fromVersion"`
+	ToVersion   string `json:"toVersion"`
+	UpdatedAt   string `json:"updatedAt"`
 }
 
 // BranchInfo records a rehearsal branch created from a parent instance.
