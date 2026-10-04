@@ -64,8 +64,24 @@ type Instance struct {
 	// this save explicitly declined to adopt; the save keeps playing under
 	// its pinned rules. Purely a marker: setting it never touches events.
 	MigrationDeferred string `json:"migrationDeferred,omitempty"`
-	CreatedAt         string `json:"createdAt"`
-	UpdatedAt         string `json:"updatedAt"`
+	// MigrationAdopted records the definition hash this save last adopted,
+	// so clients can distinguish a save that adopted new rules from one
+	// that simply never drifted.
+	MigrationAdopted string `json:"migrationAdopted,omitempty"`
+	// PendingMigration is set the moment an adopt decision is durably
+	// saved and cleared only when the adoption completes. If the process
+	// exits in between, the save reloads in an awaiting-recovery state:
+	// the decision and the exact target revision are still on disk.
+	PendingMigration *PendingMigration `json:"pendingMigration,omitempty"`
+	CreatedAt        string            `json:"createdAt"`
+	UpdatedAt        string            `json:"updatedAt"`
+}
+
+// PendingMigration is a persisted adopt decision waiting to be completed.
+type PendingMigration struct {
+	ToHash    string `json:"toHash"`
+	ToVersion string `json:"toVersion"`
+	DecidedAt string `json:"decidedAt"`
 }
 
 // BranchInfo records a rehearsal branch created from a parent instance.

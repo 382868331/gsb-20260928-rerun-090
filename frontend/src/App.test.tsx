@@ -425,5 +425,70 @@ describe("resilience and rule revision review", () => {
     // The boundary is explained in the story log.
     expect(screen.getByText(/规则迁移：v1 → v2/)).toBeTruthy();
   });
-});
 
+  it("shows facts and the pending decision before resuming an interrupted adoption", async () => {
+    const inst = newInstance("rec-1");
+    inst.facts = { gold: 5 };
+    inst.pendingMigration = { toHash: "h2", toVersion: "v2", decidedAt: "t8" };
+    state.instances["rec-1"] = inst;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: unknown, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        const parts = url.split("/");
+        if (parts[4] === "migration" && method === "POST") {
+          const cur = state.instances[parts[3]];
+          cur.pendingMigration = undefined;
+          cur.version = "v2";
+          cur.defHash = "h2";
+          cur.migrationAdopted = "h2";
+          cur.log.push({ node: cur.current, note: "规则迁移：v1 → v2", at: "t9" });
+          return Promise.resolve(
+            jsonResponse({ migration: { upToDate: true }, instance: cur, view: viewFor(cur) }),
+          );
+        }
+        return Promise.resolve(handle(input as string, init));
+      }) as unknown as typeof fetch,
+    );
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("等待恢复")).toBeTruthy());
+    fireEvent.click(screen.getByText("主线"));
+    await waitFor(() => expect(screen.getByTestId("recovery-banner")).toBeTruthy());
+    // Current facts and the pending decision are shown before continuing.
+    expect(screen.getByTestId("recovery-banner").textContent).toContain("v2");
+    expect(screen.getByTestId("recovery-banner").textContent).toContain("gold=5");
+
+    fireEvent.click(screen.getByRole("button", { name: "恢复并完成采用" }));
+    await waitFor(() => expect(screen.queryByTestId("recovery-banner")).toBeNull());
+    expect(state.instances["rec-1"].pendingMigration).toBeUndefined();
+    expect(screen.getByText(/规则迁移：v1 → v2/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("已采用")).toBeTruthy());
+  });
+
+  it("distinguishes not-adopted, adopted and awaiting-recovery branches", async () => {
+    const adopted = newInstance("a-1");
+    adopted.migrationAdopted = "h";
+    const plain = newInstance("n-1");
+    plain.defHash = "old";
+    const pending = newInstance("p-1");
+    pending.pendingMigration = { toHash: "h2", toVersion: "v2", decidedAt: "t" };
+    state.instances = { "a-1": adopted, "n-1": plain, "p-1": pending };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: unknown, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/stories") {
+          return Promise.resolve(
+            jsonResponse({ stories: [{ id: "t", title: "t", version: "v2", defHash: "h" }] }),
+          );
+        }
+        return Promise.resolve(handle(input as string, init));
+      }) as unknown as typeof fetch,
+    );
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("已采用")).toBeTruthy());
+    expect(screen.getByText("未采用")).toBeTruthy();
+    expect(screen.getByText("等待恢复")).toBeTruthy();
+  });
+});

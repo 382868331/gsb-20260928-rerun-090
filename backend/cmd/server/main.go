@@ -32,8 +32,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("open data dir: %v", err)
 	}
+	defStore, err := story.NewFileDefStore(filepath.Join(dataDir, "definitions"))
+	if err != nil {
+		log.Fatalf("open definitions dir: %v", err)
+	}
 	catalog := story.NewCatalog(seed.Story())
+	// Restore revisions that saves adopted (or are about to adopt) so a
+	// restart finds every branch's pinned rules instead of reporting drift.
+	if err := api.LoadPersistedRevisions(catalog, defStore); err != nil {
+		log.Fatalf("restore revisions: %v", err)
+	}
 	h := api.NewHandler(catalog, store, seed.InitialFacts())
+	h.SetDefStore(defStore)
 	mux := http.NewServeMux()
 	h.Register(mux)
 

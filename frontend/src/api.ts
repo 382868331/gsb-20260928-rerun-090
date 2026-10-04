@@ -3,6 +3,7 @@ import type {
   InstanceResponse,
   MigrationImpact,
   MigrationResponse,
+  RevisionInfo,
   StoryDefinition,
 } from "./types";
 
@@ -49,6 +50,26 @@ export function listInstances(): Promise<{ instances: import("./types").Instance
 
 export function getStory(id: string): Promise<StoryDefinition> {
   return request(`/api/stories/${encodeURIComponent(id)}`);
+}
+
+export function listStories(): Promise<{
+  stories: { id: string; title: string; version: string; defHash: string }[];
+}> {
+  return request("/api/stories");
+}
+
+export function listRevisions(storyId: string): Promise<{ revisions: RevisionInfo[] }> {
+  return request(`/api/stories/${encodeURIComponent(storyId)}/revisions`);
+}
+
+export function withdrawRevision(
+  storyId: string,
+  hash: string,
+): Promise<{ withdrawn: string }> {
+  return request(
+    `/api/stories/${encodeURIComponent(storyId)}/revisions/${encodeURIComponent(hash)}`,
+    { method: "DELETE" },
+  );
 }
 
 let keyCounter = 0;

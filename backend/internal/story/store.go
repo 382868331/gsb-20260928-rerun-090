@@ -104,6 +104,119 @@ func (s *FileStore) List() ([]*Instance, error) {
 }
 
 // MemoryStore keeps instances in memory and is used in tests.
+
+// FileDefStore persists story definition revisions so adoption decisions
+// survive restarts: every revision a save adopted (or is about to adopt) is
+// written next to the saves and reloaded into the catalog's history on boot.
+type FileDefStore struct {
+	Dir string
+	mu  sync.Mutex
+}
+
+func NewFileDefStore(dir string) (*FileDefStore, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	return &FileDefStore{Dir: dir}, nil
+}
+
+func (s *FileDefStore) path(hash string) string {
+	return filepath.Join(s.Dir, safeName("rev-"+hash))
+}
+
+func (s *FileDefStore) latestPath(storyID string) string {
+	return filepath.Join(s.Dir, safeName("latest-"+storyID))
+}
+
+// SaveDef writes a revision snapshot keyed by its content hash and marks it
+// as the story's latest published revision.
+func (s *FileDefStore) SaveDef(d *Definition) (string, error) {
+	hash, err := DefHash(d)
+	if err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, err := json.MarshalIndent(d, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	tmp := s.path(hash) + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return "", err
+	}
+	if err := os.Rename(tmp, s.path(hash)); err != nil {
+		return "", err
+	}
+	ltmp := s.latestPath(d.ID) + ".tmp"
+	if err := os.WriteFile(ltmp, []byte(hash), 0o644); err != nil {
+		return "", err
+	}
+	return hash, os.Rename(ltmp, s.latestPath(d.ID))
+}
+
+// KeepDef persists a revision snapshot without touching the latest marker.
+// Used when a save adopts an older revision: the definition the save now
+// depends on must survive restarts exactly as decided.
+func (s *FileDefStore) KeepDef(d *Definition) (string, error) {
+	hash, err := DefHash(d)
+	if err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, err := json.MarshalIndent(d, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	tmp := s.path(hash) + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return "", err
+	}
+	return hash, os.Rename(tmp, s.path(hash))
+}
+
+// DeleteDef removes a withdrawn revision snapshot. The latest marker is
+// never deleted here; the catalog refuses to withdraw in-use revisions.
+func (s *FileDefStore) DeleteDef(hash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err := os.Remove(s.path(hash))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// LoadAll reads every persisted revision plus each story's latest marker.
+func (s *FileDefStore) LoadAll() (defs []*Definition, latest map[string]string, err error) {
+	entries, err := os.ReadDir(s.Dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	latest = map[string]string{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(s.Dir, e.Name()))
+		if err != nil {
+			return nil, nil, err
+		}
+		if strings.HasPrefix(e.Name(), "latest-") {
+			storyID := strings.TrimSuffix(strings.TrimPrefix(e.Name(), "latest-"), ".json")
+			latest[storyID] = strings.TrimSpace(string(b))
+			continue
+		}
+		var d Definition
+		if err := json.Unmarshal(b, &d); err != nil {
+			return nil, nil, err
+		}
+		defs = append(defs, &d)
+	}
+	return defs, latest, nil
+}
+
 type MemoryStore struct {
 	mu sync.Mutex
 	m  map[string]*Instance

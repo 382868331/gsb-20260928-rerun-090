@@ -77,9 +77,31 @@ export interface Instance {
   rootId?: string;
   label?: string;
   migrationDeferred?: string;
+  migrationAdopted?: string;
+  pendingMigration?: PendingMigration;
   log: { node: string; choiceId?: string; note?: string; at: string }[];
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface PendingMigration {
+  toHash: string;
+  toVersion: string;
+  decidedAt: string;
+}
+
+export type MigrationState =
+  | "current"
+  | "not-adopted"
+  | "adopted"
+  | "awaiting-recovery";
+
+export interface RevisionInfo {
+  hash: string;
+  version: string;
+  latest: boolean;
+  inUse: boolean;
+  reason?: string;
 }
 
 export interface InstanceResponse {
@@ -88,6 +110,7 @@ export interface InstanceResponse {
   versionDrift?: boolean;
   latestVersion?: string;
   latestDefHash?: string;
+  migrationState?: MigrationState;
 }
 
 export interface EventImpact {

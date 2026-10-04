@@ -171,12 +171,11 @@ func (c *Catalog) PreviewMigration(inst *Instance) (*MigrationImpact, error) {
 	return impact, nil
 }
 
-// AdoptMigration re-pins the instance to the story's latest definition. It is
-// idempotent: adopting when already current changes nothing. Adoption refuses
-// to strand progress — if the current node no longer exists the save keeps
-// its old rules instead of silently jumping to a default position. Claimed
-// rewards and facts are untouched, so already-granted rewards never re-fire.
-func (c *Catalog) AdoptMigration(inst *Instance) (*MigrationImpact, error) {
+// BeginAdoption records the adopt decision on the instance without applying
+// it. The caller must persist the instance (and the target revision) before
+// calling CompleteAdoption, so a process exit in between reloads the save in
+// an awaiting-recovery state instead of losing the decision.
+func (c *Catalog) BeginAdoption(inst *Instance) (*MigrationImpact, error) {
 	impact, err := c.PreviewMigration(inst)
 	if err != nil {
 		return nil, err
@@ -188,17 +187,61 @@ func (c *Catalog) AdoptMigration(inst *Instance) (*MigrationImpact, error) {
 		return impact, fmt.Errorf("%w: current node %s no longer exists in version %s; the save stays on its pinned rules",
 			ErrMigrationBlocked, inst.Current, impact.ToVersion)
 	}
-	now := nowUTC()
-	inst.DefHash = impact.ToHash
-	inst.Version = impact.ToVersion
-	inst.MigrationDeferred = ""
-	inst.UpdatedAt = now
-	inst.Log = append(inst.Log, LogEntry{
-		Node: inst.Current,
-		Note: fmt.Sprintf("规则迁移：%s → %s。此前事件按旧规则保持不变，此后选择按新规则求值；已领取的奖励不重新发放。",
-			impact.FromVersion, impact.ToVersion),
-		At: now,
-	})
+	inst.PendingMigration = &PendingMigration{
+		ToHash:    impact.ToHash,
+		ToVersion: impact.ToVersion,
+		DecidedAt: nowUTC(),
+	}
+	inst.UpdatedAt = nowUTC()
+	return impact, nil
+}
+
+// CompleteAdoption applies a previously recorded adopt decision. It is
+// idempotent: once the save is re-pinned and the boundary note is written,
+// repeating the call changes nothing — claimed rewards and happened events
+// are never touched, so recovery can never re-grant or re-advance the story.
+func (c *Catalog) CompleteAdoption(inst *Instance) (*MigrationImpact, error) {
+	p := inst.PendingMigration
+	if p == nil {
+		return c.PreviewMigration(inst)
+	}
+	def, ok := c.RevisionByHash(p.ToHash)
+	if !ok {
+		return nil, fmt.Errorf("%w: adopted revision %s of story %s is missing",
+			ErrStoryVersionDrift, p.ToHash, inst.StoryID)
+	}
+	if inst.DefHash != p.ToHash {
+		now := nowUTC()
+		fromVersion := inst.Version
+		inst.DefHash = p.ToHash
+		inst.Version = def.Version
+		inst.MigrationDeferred = ""
+		inst.MigrationAdopted = p.ToHash
+		inst.Log = append(inst.Log, LogEntry{
+			Node: inst.Current,
+			Note: fmt.Sprintf("规则迁移：%s → %s。此前事件按旧规则保持不变，此后选择按新规则求值；已领取的奖励不重新发放。",
+				fromVersion, def.Version),
+			At: now,
+		})
+	}
+	inst.PendingMigration = nil
+	inst.UpdatedAt = nowUTC()
+	return c.PreviewMigration(inst)
+}
+
+// AdoptMigration re-pins the instance to the story's latest definition. It is
+// idempotent: adopting when already current changes nothing. Adoption refuses
+// to strand progress — if the current node no longer exists the save keeps
+// its old rules instead of silently jumping to a default position. Claimed
+// rewards and facts are untouched, so already-granted rewards never re-fire.
+func (c *Catalog) AdoptMigration(inst *Instance) (*MigrationImpact, error) {
+	impact, err := c.BeginAdoption(inst)
+	if err != nil || impact.UpToDate {
+		return impact, err
+	}
+	if _, err := c.CompleteAdoption(inst); err != nil {
+		return nil, err
+	}
 	return impact, nil
 }
 

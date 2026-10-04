@@ -16,6 +16,7 @@ import {
   getMigration,
   getStory,
   listInstances,
+  listStories,
   newIdempotencyKey,
   submitChoice,
 } from "./api";
@@ -26,6 +27,8 @@ import { RewardLog } from "./components/RewardLog";
 import { StoryLog } from "./components/StoryLog";
 import { ComparePanel } from "./components/ComparePanel";
 import { MigrationPanel } from "./components/MigrationPanel";
+import { RevisionList } from "./components/RevisionList";
+import { factsEntries } from "./format";
 
 export function App() {
   const [instances, setInstances] = useState<Instance[]>([]);
@@ -41,6 +44,20 @@ export function App() {
   const [compareId, setCompareId] = useState<string | null>(null);
   const [drift, setDrift] = useState<{ latestVersion: string; latestDefHash: string } | null>(null);
   const [migration, setMigration] = useState<MigrationImpact | null>(null);
+  const [latestHashes, setLatestHashes] = useState<Record<string, string>>({});
+
+  const refreshStories = useCallback(async () => {
+    try {
+      const { stories } = await listStories();
+      const map: Record<string, string> = {};
+      for (const s of stories ?? []) {
+        map[s.id] = s.defHash;
+      }
+      setLatestHashes(map);
+    } catch {
+      // The badge list is best-effort; the save list itself reports failures.
+    }
+  }, []);
 
   const refreshList = useCallback(async () => {
     try {
@@ -79,7 +96,8 @@ export function App() {
 
   useEffect(() => {
     refreshList();
-  }, [refreshList]);
+    refreshStories();
+  }, [refreshList, refreshStories]);
 
   useEffect(() => {
     if (!instance) return;
@@ -106,7 +124,8 @@ export function App() {
         : null,
     );
     refreshList();
-  }, [refreshList]);
+    refreshStories();
+  }, [refreshList, refreshStories]);
 
   const handleStart = async () => {
     setBusy(true);
@@ -244,6 +263,7 @@ export function App() {
             instances={instances}
             currentId={currentId}
             onSelect={setCurrentId}
+            latestHashes={latestHashes}
           />
         </aside>
         <section className="stage">
@@ -255,7 +275,22 @@ export function App() {
               <button onClick={() => currentId && loadInstance(currentId)}>重试</button>
             </div>
           )}
-          {instance && drift && (
+          {instance && instance.pendingMigration && (
+            <div className="banner banner-recovery" data-testid="recovery-banner">
+              <strong>采用待恢复：</strong>
+              上次采用规则 {instance.pendingMigration.toVersion} 的决定已保存（
+              {instance.pendingMigration.decidedAt}），但完成前程序退出。
+              当前事实：
+              {factsEntries(instance)
+                .map(([k, v]) => ` ${k}=${v}`)
+                .join("，") || "（无）"}
+              。请先恢复该决定再继续；重复恢复不会重复发奖或推进剧情。
+              <button onClick={() => handleMigrationDecision("adopt")} disabled={busy}>
+                恢复并完成采用
+              </button>
+            </div>
+          )}
+          {instance && !instance.pendingMigration && drift && (
             <div className="banner banner-notice">
               剧情规则已有新版本 {drift.latestVersion}，当前存档仍按原版本 {instance.version} 进行。
               <button onClick={handleReviewMigration} disabled={busy}>
@@ -282,6 +317,7 @@ export function App() {
                 <RewardLog instance={instance} />
                 <StoryLog instance={instance} def={stories[instance.storyId]} />
               </div>
+              <RevisionList storyId={instance.storyId} onChanged={refreshList} />
               {compareOpen && (
                 <ComparePanel
                   base={instance}

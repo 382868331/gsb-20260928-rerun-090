@@ -24,6 +24,8 @@ var (
 	ErrBadEffect         = fmt.Errorf("invalid effect")
 	ErrEndNode           = fmt.Errorf("story has ended")
 	ErrMigrationBlocked  = fmt.Errorf("migration blocked: progress would be lost")
+	ErrMigrationPending  = fmt.Errorf("a migration decision is awaiting recovery; resume it before continuing")
+	ErrRevisionInUse     = fmt.Errorf("revision is still referenced and must be kept")
 )
 
 // claimSep separates visit id and choice in a claim key.
@@ -117,6 +119,100 @@ func (c *Catalog) LatestHash(storyID string) (string, error) {
 		return "", err
 	}
 	return DefHash(d)
+}
+
+// RegisterRevision adds a definition snapshot to the version history
+// without making it the story's latest version. Used to restore revisions
+// that were persisted alongside adoption decisions.
+func (c *Catalog) RegisterRevision(d *Definition) (string, error) {
+	if d == nil || d.ID == "" {
+		return "", fmt.Errorf("definition missing id")
+	}
+	hash, err := DefHash(d)
+	if err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.history[hash] = d
+	return hash, nil
+}
+
+// RestoreLatest marks a previously registered revision as the story's
+// current latest definition. Used when reloading persisted revisions so a
+// restart picks up exactly where the catalogue left off.
+func (c *Catalog) RestoreLatest(storyID, hash string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	d, ok := c.history[hash]
+	if !ok {
+		return fmt.Errorf("%w: revision %s", ErrUnknownStory, hash)
+	}
+	if d.ID != storyID {
+		return fmt.Errorf("revision %s belongs to story %s, not %s", hash, d.ID, storyID)
+	}
+	c.definitions[storyID] = d
+	return nil
+}
+
+// RevisionByHash returns a registered revision snapshot.
+func (c *Catalog) RevisionByHash(hash string) (*Definition, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	d, ok := c.history[hash]
+	return d, ok
+}
+
+// RevisionInfo describes one registered revision of a story.
+type RevisionInfo struct {
+	Hash    string `json:"hash"`
+	Version string `json:"version"`
+	Latest  bool   `json:"latest"`
+}
+
+// Revisions lists every registered revision of a story, latest first then
+// by version, so authors can see what can still be withdrawn.
+func (c *Catalog) Revisions(storyID string) []RevisionInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	latestHash := ""
+	if d, ok := c.definitions[storyID]; ok {
+		if h, err := DefHash(d); err == nil {
+			latestHash = h
+		}
+	}
+	out := []RevisionInfo{}
+	for hash, d := range c.history {
+		if d.ID != storyID {
+			continue
+		}
+		out = append(out, RevisionInfo{Hash: hash, Version: d.Version, Latest: hash == latestHash})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Latest != out[j].Latest {
+			return out[i].Latest
+		}
+		return out[i].Version > out[j].Version
+	})
+	return out
+}
+
+// RemoveRevision withdraws a revision that no save references. The story's
+// current latest revision cannot be withdrawn: new saves start from it.
+func (c *Catalog) RemoveRevision(hash string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	d, ok := c.history[hash]
+	if !ok {
+		return fmt.Errorf("%w: revision %s", ErrUnknownStory, hash)
+	}
+	if latest, ok := c.definitions[d.ID]; ok {
+		if lh, err := DefHash(latest); err == nil && lh == hash {
+			return fmt.Errorf("%w: %s is the latest published revision of story %s", ErrRevisionInUse, hash, d.ID)
+		}
+	}
+	delete(c.history, hash)
+	return nil
 }
 
 // DefHash is a stable hash of the definition content used as a version pin.
@@ -389,24 +485,30 @@ func Fork(parent *Instance, branchID, label string) *Instance {
 	parent.Branches[branchID] = BranchInfo{ID: branchID, Label: label, Node: parent.Current, CreatedAt: now}
 	parent.UpdatedAt = now
 	forked := &Instance{
-		ID:        branchID,
-		StoryID:   parent.StoryID,
-		Version:   parent.Version,
-		DefHash:   parent.DefHash,
-		Current:   parent.Current,
-		Facts:     cloneFacts(parent.Facts),
-		Claimed:   append([]string{}, parent.Claimed...),
-		Rewards:   append([]Reward{}, parent.Rewards...),
-		Branches:  map[string]BranchInfo{},
-		VisitID:   parent.VisitID,
-		Rev:       parent.Rev,
-		Decisions: cloneDecisions(parent.Decisions),
-		Log:       append([]LogEntry{}, parent.Log...),
-		ParentID:  parent.ID,
-		RootID:    parent.RootID,
-		Label:     label,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:                branchID,
+		StoryID:           parent.StoryID,
+		Version:           parent.Version,
+		DefHash:           parent.DefHash,
+		Current:           parent.Current,
+		Facts:             cloneFacts(parent.Facts),
+		Claimed:           append([]string{}, parent.Claimed...),
+		Rewards:           append([]Reward{}, parent.Rewards...),
+		Branches:          map[string]BranchInfo{},
+		VisitID:           parent.VisitID,
+		Rev:               parent.Rev,
+		Decisions:         cloneDecisions(parent.Decisions),
+		Log:               append([]LogEntry{}, parent.Log...),
+		ParentID:          parent.ID,
+		RootID:            parent.RootID,
+		Label:             label,
+		MigrationDeferred: parent.MigrationDeferred,
+		MigrationAdopted:  parent.MigrationAdopted,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if parent.PendingMigration != nil {
+		p := *parent.PendingMigration
+		forked.PendingMigration = &p
 	}
 	if forked.RootID == "" {
 		forked.RootID = parent.ID
