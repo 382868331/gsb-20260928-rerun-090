@@ -32,7 +32,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("open data dir: %v", err)
 	}
-	catalog := story.NewCatalog(seed.Story())
+	revDir := os.Getenv("REVISION_DIR")
+	if revDir == "" {
+		revDir = filepath.Join(dataDir, "revisions")
+	}
+	revisions, err := story.NewFileRevisionStore(revDir)
+	if err != nil {
+		log.Fatalf("open revision dir: %v", err)
+	}
+	// Restored snapshots (including revisions adopted by existing saves)
+	// rebuild the catalog history before the built-in seed is registered; the
+	// seed never downgrades a newer restored revision.
+	catalog := story.NewCatalogWithStore(revisions, seed.Story())
 	h := api.NewHandler(catalog, store, seed.InitialFacts())
 	mux := http.NewServeMux()
 	h.Register(mux)

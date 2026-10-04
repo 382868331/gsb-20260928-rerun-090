@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -57,18 +58,70 @@ type AppliedChoice struct {
 type Catalog struct {
 	definitions map[string]*Definition
 	history     map[string]*Definition // defHash -> definition snapshot
+	revisions   RevisionStore          // persisted snapshots; nil means memory-only
 	mu          sync.RWMutex
 }
 
 func NewCatalog(defs ...*Definition) *Catalog {
+	return NewCatalogWithStore(NewMemoryRevisionStore(), defs...)
+}
+
+// NewCatalogWithStore builds a catalog whose published snapshots are
+// persisted through revisions, so a restarted process can still resolve
+// definitions adopted by existing saves.
+func NewCatalogWithStore(revisions RevisionStore, defs ...*Definition) *Catalog {
 	c := &Catalog{
 		definitions: map[string]*Definition{},
 		history:     map[string]*Definition{},
+		revisions:   revisions,
+	}
+	// Rebuild the in-memory version history from snapshots saved by earlier
+	// process runs. The newest snapshot for each story becomes its current
+	// latest definition; ordering is by persisted version metadata below.
+	if revisions != nil {
+		if snapshots, err := revisions.LoadAll(); err == nil {
+			latest := map[string]*Definition{}
+			for _, d := range snapshots {
+				hash, _ := DefHash(d)
+				c.history[hash] = d
+				cur := latest[d.ID]
+				if cur == nil || revisionOrder(d, cur) > 0 {
+					latest[d.ID] = d
+				}
+			}
+			for id, d := range latest {
+				c.definitions[id] = d
+			}
+		}
 	}
 	for _, d := range defs {
-		_ = c.Update(d)
+		hash, err := DefHash(d)
+		if err != nil {
+			continue
+		}
+		c.history[hash] = d
+		if c.revisions != nil {
+			_ = c.revisions.SaveRevision(d.ID, hash, d)
+		}
+		// A built-in seed never downgrades a newer revision restored from
+		// snapshots written by a previous process run.
+		if cur, ok := c.definitions[d.ID]; !ok || revisionOrder(d, cur) > 0 {
+			c.definitions[d.ID] = d
+		}
 	}
 	return c
+}
+
+// revisionOrder ranks built-in seeds below published snapshots and otherwise
+// treats snapshots as equal so a restored snapshot wins on startup.
+func revisionOrder(a, b *Definition) int {
+	if a == nil {
+		return -1
+	}
+	if b == nil {
+		return 1
+	}
+	return strings.Compare(a.Version, b.Version)
 }
 
 func (c *Catalog) Get(id string) (*Definition, error) {
@@ -107,7 +160,94 @@ func (c *Catalog) Update(d *Definition) error {
 	defer c.mu.Unlock()
 	c.definitions[d.ID] = d
 	c.history[hash] = d
+	if c.revisions != nil {
+		if err := c.revisions.SaveRevision(d.ID, hash, d); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// ErrRevisionInUse is returned when withdrawing a revision that a save is
+// pinned to, that a pending adoption targets, or that a completed adoption
+// history references.
+var ErrRevisionInUse = fmt.Errorf("revision is in use and must be retained")
+
+// RevisionUsage explains why a revision cannot be withdrawn.
+type RevisionUsage struct {
+	PinnedBy  []string `json:"pinnedBy"`
+	PendingBy []string `json:"pendingBy"`
+	HistoryOf []string `json:"historyOf"`
+}
+
+// WithdrawRevision removes a non-current revision snapshot when nothing
+// references it. refs supplies the instance usage scan; a referenced
+// revision is retained and the call returns the specific reasons. The
+// current latest revision cannot be withdrawn this way either — publish a
+// replacement instead.
+func (c *Catalog) WithdrawRevision(storyID, hash string, refs *RevisionUsage) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	d, ok := c.history[hash]
+	if !ok || d.ID != storyID {
+		return fmt.Errorf("%w: %s@%s", ErrUnknownStory, storyID, hash)
+	}
+	if latest, ok := c.definitions[storyID]; ok {
+		if h, _ := DefHash(latest); h == hash {
+			return fmt.Errorf("%w: revision %s is the current latest version of %s; publish a replacement instead",
+				ErrRevisionInUse, d.Version, storyID)
+		}
+	}
+	if refs != nil && (len(refs.PinnedBy)+len(refs.PendingBy)+len(refs.HistoryOf) > 0) {
+		return fmt.Errorf("%w: %s is referenced (pinned=%v pending=%v history=%v) and is retained so saves stay replayable",
+			ErrRevisionInUse, d.Version, refs.PinnedBy, refs.PendingBy, refs.HistoryOf)
+	}
+	delete(c.history, hash)
+	if c.revisions != nil {
+		if err := c.revisions.DeleteRevision(storyID, hash); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RevisionSnapshots returns the retained version hashes for a story with
+// their version labels, oldest first.
+func (c *Catalog) RevisionSnapshots(storyID string) []RevisionSummary {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := []RevisionSummary{}
+	for hash, d := range c.history {
+		if d.ID != storyID {
+			continue
+		}
+		current := false
+		if latest, ok := c.definitions[storyID]; ok {
+			h, _ := DefHash(latest)
+			current = h == hash
+		}
+		out = append(out, RevisionSummary{Version: d.Version, Hash: hash, Current: current})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Version < out[j].Version })
+	return out
+}
+
+// RevisionSummary describes one retained revision of a story.
+type RevisionSummary struct {
+	Version string `json:"version"`
+	Hash    string `json:"hash"`
+	Current bool   `json:"current"`
+}
+
+// DefinitionForHash returns the retained snapshot for a hash regardless of
+// whether it is the latest.
+func (c *Catalog) DefinitionForHash(hash string) (*Definition, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if d, ok := c.history[hash]; ok {
+		return d, nil
+	}
+	return nil, fmt.Errorf("%w: %s", ErrUnknownStory, hash)
 }
 
 // LatestHash returns the hash of the story's current latest definition.
@@ -389,24 +529,30 @@ func Fork(parent *Instance, branchID, label string) *Instance {
 	parent.Branches[branchID] = BranchInfo{ID: branchID, Label: label, Node: parent.Current, CreatedAt: now}
 	parent.UpdatedAt = now
 	forked := &Instance{
-		ID:        branchID,
-		StoryID:   parent.StoryID,
-		Version:   parent.Version,
-		DefHash:   parent.DefHash,
-		Current:   parent.Current,
-		Facts:     cloneFacts(parent.Facts),
-		Claimed:   append([]string{}, parent.Claimed...),
-		Rewards:   append([]Reward{}, parent.Rewards...),
-		Branches:  map[string]BranchInfo{},
-		VisitID:   parent.VisitID,
-		Rev:       parent.Rev,
-		Decisions: cloneDecisions(parent.Decisions),
-		Log:       append([]LogEntry{}, parent.Log...),
-		ParentID:  parent.ID,
-		RootID:    parent.RootID,
-		Label:     label,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:                branchID,
+		StoryID:           parent.StoryID,
+		Version:           parent.Version,
+		DefHash:           parent.DefHash,
+		Current:           parent.Current,
+		Facts:             cloneFacts(parent.Facts),
+		Claimed:           append([]string{}, parent.Claimed...),
+		Rewards:           append([]Reward{}, parent.Rewards...),
+		Branches:          map[string]BranchInfo{},
+		VisitID:           parent.VisitID,
+		Rev:               parent.Rev,
+		Decisions:         cloneDecisions(parent.Decisions),
+		Log:               append([]LogEntry{}, parent.Log...),
+		ParentID:          parent.ID,
+		RootID:            parent.RootID,
+		Label:             label,
+		MigrationDeferred: parent.MigrationDeferred,
+		MigrationHistory:  append([]MigrationRecord{}, parent.MigrationHistory...),
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if parent.PendingMigration != nil {
+		pending := *parent.PendingMigration
+		forked.PendingMigration = &pending
 	}
 	if forked.RootID == "" {
 		forked.RootID = parent.ID

@@ -26,6 +26,8 @@ import { RewardLog } from "./components/RewardLog";
 import { StoryLog } from "./components/StoryLog";
 import { ComparePanel } from "./components/ComparePanel";
 import { MigrationPanel } from "./components/MigrationPanel";
+import { PendingAdoptionPanel } from "./components/PendingAdoptionPanel";
+import type { MigrationStatus } from "./types";
 
 export function App() {
   const [instances, setInstances] = useState<Instance[]>([]);
@@ -41,6 +43,7 @@ export function App() {
   const [compareId, setCompareId] = useState<string | null>(null);
   const [drift, setDrift] = useState<{ latestVersion: string; latestDefHash: string } | null>(null);
   const [migration, setMigration] = useState<MigrationImpact | null>(null);
+  const [migrationStatus, setMigrationStatus] = useState<MigrationStatus | null>(null);
 
   const refreshList = useCallback(async () => {
     try {
@@ -65,6 +68,7 @@ export function App() {
       setError(null);
       setLoadError(null);
       setMigration(null);
+      setMigrationStatus(res.migrationStatus ?? null);
       setDrift(
         res.versionDrift && res.latestDefHash
           ? { latestVersion: res.latestVersion ?? "", latestDefHash: res.latestDefHash }
@@ -100,6 +104,7 @@ export function App() {
     setInstance(res.instance);
     setView(res.view);
     setMigration(null);
+    setMigrationStatus(res.migrationStatus ?? null);
     setDrift(
       res.versionDrift && res.latestDefHash
         ? { latestVersion: res.latestVersion ?? "", latestDefHash: res.latestDefHash }
@@ -207,6 +212,41 @@ export function App() {
     }
   };
 
+  const handleResumeAdoption = async () => {
+    if (!currentId || busy) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await decideMigration(currentId, "adopt", "complete");
+      applyResponse(res);
+      if (res.migration?.alreadyAdopted) {
+        setNotice("该恢复请求已处理过：奖励与剧情均未重复推进。");
+      } else {
+        setNotice("已完成采用：此前事件与奖励保持原样，此后选择按新规则求值。");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCancelPending = async () => {
+    if (!currentId || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await decideMigration(currentId, "cancel");
+      applyResponse(res);
+      setNotice("已放弃本次采用，分支继续按旧版本进行。");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const siblings = instance
     ? instances.filter((i) => i.id !== instance.id && rootOf(i) === rootOf(instance))
     : [];
@@ -255,12 +295,27 @@ export function App() {
               <button onClick={() => currentId && loadInstance(currentId)}>重试</button>
             </div>
           )}
-          {instance && drift && (
+          {instance && instance.pendingMigration && (
+            <PendingAdoptionPanel
+              pending={instance.pendingMigration}
+              instance={instance}
+              busy={busy}
+              onResume={handleResumeAdoption}
+              onCancel={handleCancelPending}
+            />
+          )}
+          {instance && drift && !instance.pendingMigration && (
             <div className="banner banner-notice">
               剧情规则已有新版本 {drift.latestVersion}，当前存档仍按原版本 {instance.version} 进行。
-              <button onClick={handleReviewMigration} disabled={busy}>
-                查看影响
-              </button>
+              {migrationStatus === "blocked" ? (
+                <span className="muted">
+                  当前节点在新版本中已被移除，采用会丢失进度，因此该分支保留原版本。
+                </span>
+              ) : (
+                <button onClick={handleReviewMigration} disabled={busy}>
+                  查看影响
+                </button>
+              )}
             </div>
           )}
           {migration && (

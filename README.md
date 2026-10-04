@@ -49,7 +49,9 @@ npm run dev
 - 「剧情记录」面板按存档中的日志逐步解释：节点、所做选择、该选择发放的
   奖励，重开存档、重复提交或条件变化后记录仍可逐步复盘。
 - 剧情规则修订按存档审查：作者通过 `PUT /api/stories/{id}` 发布新修订后，
-  目录保留全部历史版本，未迁移的存档继续按原版本进行。每个存档可通过
+  目录保留全部历史版本，且每个修订快照与采用决定一起原子落盘到
+  `data/revisions/`：进程重启后目录从快照重建，采用了新规则的存档仍能
+  找到它实际固定的定义，未采用的分支继续按原版本打开。每个存档可通过
   `GET /api/instances/{id}/migration` 预览影响——哪些已完成事件保持原样、
   当前节点的哪些未来选择发生变化——再通过
   `POST /api/instances/{id}/migration` 按分支决定 `adopt`（仅此分支采用新
@@ -57,6 +59,18 @@ npm run dev
   规则中已移除时迁移被拒绝（409），进度不会静默跳回默认位置。采用后日志
   追加一条边界说明，重开存档可逐步复盘新旧规则交界；重复确认或撤回均
   为幂等操作，不改变已发生事件。
+- 采用采用两阶段、可恢复的流程：`{"action":"adopt","phase":"begin"}`
+  先把「从哪个版本采用到哪个版本」的决定连同存档落盘（存档继续按旧规则
+  游玩），`phase:"complete"` 才真正切换。采用过程中退出（含重启）后，
+  `GET` 返回 `migrationStatus:"pending"` 与待恢复决定，页面先展示当前事实
+  和决定，再允许继续；重复到达的完成请求返回 `alreadyAdopted`，不会再次
+  发奖或推进剧情，也不会重复追加边界日志。分支状态可区分：尚未采用
+  （`available`）、已经采用（`current` + `migrationHistory`）、等待恢复
+  （`pending`）、以及新规则已删除当前节点无法采用（`blocked`）。
+- 未被任何存档采用、也没有待恢复采用或历史采用记录引用的非最新修订，可由
+  `DELETE /api/stories/{id}/revisions/{hash}` 撤回；被存档固定、待恢复采用
+  或历史记录引用的修订必须保留，接口返回 409 并在 `pinnedBy` /
+  `pendingBy` / `historyOf` 中说明引用它的存档。当前最新版本不能直接撤回。
 
 ## HTTP API
 
@@ -65,6 +79,8 @@ npm run dev
 | GET | `/api/stories` | 剧情列表（含版本哈希） |
 | GET | `/api/stories/{id}` | 剧情定义 |
 | PUT | `/api/stories/{id}` | 作者发布修订定义（旧版本保留可玩） |
+| GET | `/api/stories/{id}/revisions` | 保留的修订列表及撤回受限原因 |
+| DELETE | `/api/stories/{id}/revisions/{hash}` | 撤回未被引用的非最新修订 |
 | POST | `/api/instances` | 开始新故事 |
 | GET | `/api/instances` | 存档与分支列表 |
 | GET | `/api/instances/{id}` | 继续：当前节点 + 允许的选项 |

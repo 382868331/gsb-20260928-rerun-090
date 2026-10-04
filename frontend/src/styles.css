@@ -136,3 +136,32 @@ code { background: #0f1320; padding: 1px 6px; border-radius: 4px; }
 .compare-shared h3, .compare-col h3 { margin: 0 0 8px; font-size: 14px; color: #9fb0d0; }
 .compare-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 .compare-col { border: 1px solid #2a3350; border-radius: 8px; padding: 10px 14px; }
+
+.branch-status {
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid #3a4665;
+  color: #9fb4e0;
+  background: #202738;
+}
+.branch-status-adopted {
+  color: #88e0a0;
+  border-color: #2f6b45;
+  background: #16281d;
+}
+.branch-status-pending {
+  color: #ffd28a;
+  border-color: #7a5a24;
+  background: #2c2415;
+}
+.pending-facts,
+.pending-decision {
+  margin: 6px 0 14px;
+  padding-left: 18px;
+}
+.pending-facts li,
+.pending-decision li {
+  margin: 2px 0;
+}

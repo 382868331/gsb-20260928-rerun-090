@@ -77,10 +77,29 @@ export interface Instance {
   rootId?: string;
   label?: string;
   migrationDeferred?: string;
+  migrationHistory?: {
+    fromVersion: string;
+    toVersion: string;
+    fromHash: string;
+    toHash: string;
+    at: string;
+  }[];
+  pendingMigration?: PendingAdoption;
   log: { node: string; choiceId?: string; note?: string; at: string }[];
   createdAt?: string;
   updatedAt?: string;
 }
+
+export interface PendingAdoption {
+  storyId: string;
+  fromVersion: string;
+  toVersion: string;
+  fromHash: string;
+  toHash: string;
+  at: string;
+}
+
+export type MigrationStatus = "current" | "available" | "pending" | "blocked";
 
 export interface InstanceResponse {
   instance: Instance;
@@ -88,6 +107,8 @@ export interface InstanceResponse {
   versionDrift?: boolean;
   latestVersion?: string;
   latestDefHash?: string;
+  migrationStatus?: MigrationStatus;
+  pendingMigration?: PendingAdoption;
 }
 
 export interface EventImpact {
@@ -120,6 +141,8 @@ export interface MigrationImpact {
   currentNodeMissing: boolean;
   completed: EventImpact[];
   future: ChoiceImpact[];
+  pending?: boolean;
+  alreadyAdopted?: boolean;
 }
 
 export interface MigrationResponse extends InstanceResponse {

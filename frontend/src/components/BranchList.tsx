@@ -1,5 +1,16 @@
 import type { Instance } from "../types";
 
+function statusOf(i: Instance): { key: string; label: string } | null {
+  if (i.pendingMigration) {
+    return { key: "pending", label: "等待恢复采用" };
+  }
+  const last = i.migrationHistory?.[i.migrationHistory.length - 1];
+  if (last && last.toHash === i.defHash) {
+    return { key: "adopted", label: `已采用 ${last.toVersion}` };
+  }
+  return null;
+}
+
 interface Props {
   instances: Instance[];
   currentId: string | null;
@@ -24,6 +35,11 @@ export function BranchList({ instances, currentId, onSelect }: Props) {
               <span className="branch-label">
                 主线{root.label ? " · " + root.label : ""}
               </span>
+              {statusOf(root) && (
+                <span className={"branch-status branch-status-" + statusOf(root)?.key}>
+                  {statusOf(root)?.label}
+                </span>
+              )}
               <span className="branch-node">{root.current}</span>
             </button>
             <ul className="subbranches">
@@ -35,6 +51,11 @@ export function BranchList({ instances, currentId, onSelect }: Props) {
                     title={"从 " + b.parentId + " 分出"}
                   >
                     <span className="branch-label">{"⎇ " + (b.label || b.id)}</span>
+                    {statusOf(b) && (
+                      <span className={"branch-status branch-status-" + statusOf(b)?.key}>
+                        {statusOf(b)?.label}
+                      </span>
+                    )}
                     <span className="branch-node">{b.current}</span>
                   </button>
                 </li>

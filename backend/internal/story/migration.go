@@ -50,6 +50,13 @@ type MigrationImpact struct {
 	CurrentNodeMissing bool           `json:"currentNodeMissing"`
 	Completed          []EventImpact  `json:"completed"`
 	Future             []ChoiceImpact `json:"future"`
+	// Pending is true when a durable "adoption in progress" decision was
+	// saved but never completed (e.g. the process exited mid-adoption). The
+	// save is still playing under FromHash rules until completion resumes.
+	Pending bool `json:"pending,omitempty"`
+	// AlreadyAdopted is true when a repeated completion arrives after the
+	// adoption already finished; no rewards or story position change again.
+	AlreadyAdopted bool `json:"alreadyAdopted,omitempty"`
 }
 
 func jsonEqual(a, b interface{}) bool {
@@ -115,7 +122,11 @@ func (c *Catalog) PreviewMigration(inst *Instance) (*MigrationImpact, error) {
 	}
 	if toHash == inst.DefHash {
 		impact.UpToDate = true
+		impact.Pending = inst.PendingMigration != nil
 		return impact, nil
+	}
+	if inst.PendingMigration != nil && inst.PendingMigration.ToHash == toHash {
+		impact.Pending = true
 	}
 
 	// Completed events: replay the persisted log and classify each taken
@@ -171,12 +182,12 @@ func (c *Catalog) PreviewMigration(inst *Instance) (*MigrationImpact, error) {
 	return impact, nil
 }
 
-// AdoptMigration re-pins the instance to the story's latest definition. It is
-// idempotent: adopting when already current changes nothing. Adoption refuses
-// to strand progress — if the current node no longer exists the save keeps
-// its old rules instead of silently jumping to a default position. Claimed
-// rewards and facts are untouched, so already-granted rewards never re-fire.
-func (c *Catalog) AdoptMigration(inst *Instance) (*MigrationImpact, error) {
+// BeginAdoption reviews the revision and durably records the decision to
+// adopt it without touching the pin, rewards, facts or position. The caller
+// must persist the instance afterwards. A crash after begin leaves a
+// resumable "waiting for recovery" save that still plays under the old
+// rules. Begin refuses revisions that would strand the current node.
+func (c *Catalog) BeginAdoption(inst *Instance) (*MigrationImpact, error) {
 	impact, err := c.PreviewMigration(inst)
 	if err != nil {
 		return nil, err
@@ -188,18 +199,125 @@ func (c *Catalog) AdoptMigration(inst *Instance) (*MigrationImpact, error) {
 		return impact, fmt.Errorf("%w: current node %s no longer exists in version %s; the save stays on its pinned rules",
 			ErrMigrationBlocked, inst.Current, impact.ToVersion)
 	}
-	now := nowUTC()
-	inst.DefHash = impact.ToHash
-	inst.Version = impact.ToVersion
+	inst.PendingMigration = &PendingAdoption{
+		StoryID:     inst.StoryID,
+		FromVersion: impact.FromVersion,
+		ToVersion:   impact.ToVersion,
+		FromHash:    impact.FromHash,
+		ToHash:      impact.ToHash,
+		At:          nowUTC(),
+	}
 	inst.MigrationDeferred = ""
+	inst.UpdatedAt = nowUTC()
+	impact.Pending = true
+	return impact, nil
+}
+
+// CompleteAdoption finishes a previously begun adoption. It is safe against
+// duplicated resume requests: once completed, later calls change nothing
+// (no second boundary log entry, no reward replay, no story advance) and
+// report AlreadyAdopted. The boolean result is true only when this call
+// actually performed the re-pin.
+func (c *Catalog) CompleteAdoption(inst *Instance) (*MigrationImpact, bool, error) {
+	pending := inst.PendingMigration
+	// Idempotent replay: the adoption already completed in an earlier
+	// request that the client believed had failed.
+	if pending == nil {
+		impact, err := c.PreviewMigration(inst)
+		if err != nil {
+			return nil, false, err
+		}
+		if impact.UpToDate && hasAdoptedTo(inst, impact.ToHash) {
+			impact.AlreadyAdopted = true
+		}
+		return impact, false, nil
+	}
+	if inst.DefHash != pending.FromHash {
+		// The save moved under different rules while a decision was pending
+		// (it should keep old rules, so this indicates a newer completed
+		// migration); drop the stale decision instead of forcing the pin.
+		if inst.DefHash == pending.ToHash && hasAdoptedTo(inst, pending.ToHash) {
+			inst.PendingMigration = nil
+			impact, err := c.PreviewMigration(inst)
+			if err != nil {
+				return nil, false, err
+			}
+			impact.AlreadyAdopted = true
+			return impact, false, nil
+		}
+		inst.PendingMigration = nil
+		return nil, false, fmt.Errorf("%w: save moved from %s while adoption to %s was pending",
+			ErrMigrationBlocked, pending.FromHash, pending.ToHash)
+	}
+	// The target snapshot must still be resolvable; persistence keeps it
+	// alongside the decision, so a restarted process can find it.
+	toDef, err := c.DefinitionForHash(pending.ToHash)
+	if err != nil {
+		return nil, false, err
+	}
+	if _, ok := toDef.Nodes[inst.Current]; !ok {
+		return nil, false, fmt.Errorf("%w: current node %s no longer exists in version %s; the save stays on its pinned rules",
+			ErrMigrationBlocked, inst.Current, pending.ToVersion)
+	}
+	now := nowUTC()
+	inst.DefHash = pending.ToHash
+	inst.Version = pending.ToVersion
+	inst.MigrationDeferred = ""
+	inst.PendingMigration = nil
 	inst.UpdatedAt = now
+	inst.MigrationHistory = append(inst.MigrationHistory, MigrationRecord{
+		FromVersion: pending.FromVersion,
+		ToVersion:   pending.ToVersion,
+		FromHash:    pending.FromHash,
+		ToHash:      pending.ToHash,
+		At:          now,
+	})
 	inst.Log = append(inst.Log, LogEntry{
 		Node: inst.Current,
 		Note: fmt.Sprintf("规则迁移：%s → %s。此前事件按旧规则保持不变，此后选择按新规则求值；已领取的奖励不重新发放。",
-			impact.FromVersion, impact.ToVersion),
+			pending.FromVersion, pending.ToVersion),
 		At: now,
 	})
-	return impact, nil
+	impact, err := c.PreviewMigration(inst)
+	if err != nil {
+		return nil, true, err
+	}
+	return impact, true, nil
+}
+
+// CancelAdoption abandons a pending adoption decision. Happened events and
+// the pinned rules are untouched.
+func (c *Catalog) CancelAdoption(inst *Instance) error {
+	if inst.PendingMigration == nil {
+		return nil
+	}
+	inst.PendingMigration = nil
+	inst.UpdatedAt = nowUTC()
+	return nil
+}
+
+func hasAdoptedTo(inst *Instance, hash string) bool {
+	for _, rec := range inst.MigrationHistory {
+		if rec.ToHash == hash {
+			return true
+		}
+	}
+	return false
+}
+
+// AdoptMigration performs the full begin + complete sequence in one call for
+// callers that do not need a separate resume step. Claimed rewards and facts
+// are untouched, so already-granted rewards never re-fire.
+func (c *Catalog) AdoptMigration(inst *Instance) (*MigrationImpact, error) {
+	impact, err := c.BeginAdoption(inst)
+	if err != nil {
+		return nil, err
+	}
+	if impact.UpToDate {
+		return impact, nil
+	}
+	impact, _, err = c.CompleteAdoption(inst)
+	return impact, err
 }
 
 // DeferMigration records that the author of this save declined the latest

@@ -85,10 +85,33 @@ export function getMigration(id: string): Promise<{ migration: MigrationImpact }
 
 export function decideMigration(
   id: string,
-  action: "adopt" | "defer",
+	action: "adopt" | "defer" | "cancel",
+	phase?: "begin" | "complete" | "complete-and-commit",
 ): Promise<MigrationResponse> {
   return request(`/api/instances/${encodeURIComponent(id)}/migration`, {
     method: "POST",
-    body: JSON.stringify({ action }),
+		body: JSON.stringify({ action, phase }),
   });
+}
+
+export function withdrawRevision(
+  storyId: string,
+  hash: string,
+): Promise<{ withdrawn?: string; error?: string; retained?: boolean; pinnedBy?: string[]; pendingBy?: string[]; historyOf?: string[] }> {
+  return request(`/api/stories/${encodeURIComponent(storyId)}/revisions/${encodeURIComponent(hash)}`, {
+    method: "DELETE",
+  });
+}
+
+export interface RevisionSummary {
+  version: string;
+  hash: string;
+  current: boolean;
+  withdrawable?: boolean;
+  retained?: boolean;
+  reasons?: string[];
+}
+
+export function listRevisions(storyId: string): Promise<{ revisions: RevisionSummary[] }> {
+  return request(`/api/stories/${encodeURIComponent(storyId)}/revisions`);
 }

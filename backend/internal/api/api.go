@@ -29,6 +29,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/stories", h.listStories)
 	mux.HandleFunc("GET /api/stories/{id}", h.getStory)
 	mux.HandleFunc("PUT /api/stories/{id}", h.updateStory)
+	mux.HandleFunc("GET /api/stories/{id}/revisions", h.listRevisions)
+	mux.HandleFunc("DELETE /api/stories/{id}/revisions/{hash}", h.withdrawRevision)
 	mux.HandleFunc("POST /api/instances", h.createInstance)
 	mux.HandleFunc("GET /api/instances/{id}", h.getInstance)
 	mux.HandleFunc("POST /api/instances/{id}/choices", h.applyChoice)
@@ -47,21 +49,48 @@ type instanceResponse struct {
 	VersionDrift  bool   `json:"versionDrift,omitempty"`
 	LatestVersion string `json:"latestVersion,omitempty"`
 	LatestDefHash string `json:"latestDefHash,omitempty"`
+	// MigrationStatus is current (up to date), available (new revision
+	// offered, not adopted), pending (a begin recorded, completion
+	// interrupted) or blocked (latest revision removed the current node).
+	MigrationStatus string                 `json:"migrationStatus,omitempty"`
+	Pending         *story.PendingAdoption `json:"pendingMigration,omitempty"`
 }
 
 // decorate annotates the response with rule-revision drift information.
 func (h *Handler) decorate(resp *instanceResponse, inst *story.Instance) {
+	if inst.PendingMigration != nil {
+		resp.MigrationStatus = "pending"
+		resp.Pending = inst.PendingMigration
+		resp.LatestVersion = inst.PendingMigration.ToVersion
+		resp.LatestDefHash = inst.PendingMigration.ToHash
+		return
+	}
 	d, err := h.catalog.Get(inst.StoryID)
 	if err != nil {
 		return
 	}
 	hash, err := story.DefHash(d)
-	if err != nil || hash == inst.DefHash {
+	if err != nil {
+		return
+	}
+	if hash == inst.DefHash {
+		resp.MigrationStatus = "current"
 		return
 	}
 	resp.VersionDrift = true
 	resp.LatestVersion = d.Version
 	resp.LatestDefHash = hash
+	// If adopting the offered revision would strand the save, mark blocked so
+	// the UI can explain rather than offer a failing button.
+	if impact, perr := h.catalog.PreviewMigration(inst); perr == nil {
+		if impact.CurrentNodeMissing {
+			resp.MigrationStatus = "blocked"
+		} else {
+			resp.MigrationStatus = "available"
+		}
+	} else {
+		resp.MigrationStatus = "available"
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -107,6 +136,115 @@ func (h *Handler) listStories(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"stories": out})
+}
+
+func (h *Handler) listRevisions(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := h.catalog.Get(id); err != nil {
+		// A story that only has withdrawn/historical snapshots still lists
+		// them when at least one retained revision exists for the id.
+		writeError(w, err)
+		return
+	}
+	refs := h.scanRevisionUsage(id)
+	resp := make([]map[string]interface{}, 0)
+	for _, rev := range h.catalog.RevisionSnapshots(id) {
+		item := map[string]interface{}{
+			"version": rev.Version, "hash": rev.Hash, "current": rev.Current,
+			"retained": true,
+		}
+		reasons := refs[rev.Hash]
+		if len(reasons) > 0 {
+			item["withdrawable"] = false
+			item["reasons"] = reasons
+		} else if !rev.Current {
+			item["withdrawable"] = true
+		}
+		resp = append(resp, item)
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"revisions": resp})
+}
+
+// scanRevisionUsage walks every save once and records why each revision hash
+// of the story must be retained: a live pin, a pending adoption, or a
+// completed adoption history entry.
+func (h *Handler) scanRevisionUsage(storyID string) map[string][]string {
+	out := map[string][]string{}
+	insts, err := h.store.List()
+	if err != nil {
+		return out
+	}
+	add := func(hash, reason, id string) {
+		if hash == "" {
+			return
+		}
+		for _, existing := range out[hash] {
+			if existing == reason+":"+id {
+				return
+			}
+		}
+		out[hash] = append(out[hash], reason+":"+id)
+	}
+	for _, inst := range insts {
+		if inst.StoryID != storyID {
+			continue
+		}
+		add(inst.DefHash, "存档采用", inst.ID)
+		if inst.PendingMigration != nil {
+			add(inst.PendingMigration.ToHash, "等待恢复的采用", inst.ID)
+			add(inst.PendingMigration.FromHash, "等待恢复的存档基线", inst.ID)
+		}
+		for _, rec := range inst.MigrationHistory {
+			add(rec.ToHash, "历史采用记录", inst.ID)
+			add(rec.FromHash, "历史采用记录", inst.ID)
+		}
+	}
+	return out
+}
+
+func (h *Handler) withdrawRevision(w http.ResponseWriter, r *http.Request) {
+	storyID := r.PathValue("id")
+	hash := r.PathValue("hash")
+	usage := h.scanRevisionUsage(storyID)
+	refs := &story.RevisionUsage{}
+	for _, reason := range usage[hash] {
+		id := reason
+		if i := strings.LastIndex(reason, ":"); i >= 0 {
+			id = reason[i+1:]
+		}
+		switch {
+		case strings.HasPrefix(reason, "存档采用"):
+			refs.PinnedBy = appendUnique(refs.PinnedBy, id)
+		case strings.HasPrefix(reason, "等待恢复的采用"):
+			refs.PendingBy = appendUnique(refs.PendingBy, id)
+		case strings.HasPrefix(reason, "等待恢复的存档基线"):
+			refs.PinnedBy = appendUnique(refs.PinnedBy, id)
+		case strings.HasPrefix(reason, "历史采用记录"):
+			refs.HistoryOf = appendUnique(refs.HistoryOf, id)
+		}
+	}
+	if err := h.catalog.WithdrawRevision(storyID, hash, refs); err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, story.ErrUnknownStory) {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, map[string]interface{}{
+			"error":    err.Error(),
+			"retained": true,
+			"pinnedBy": refs.PinnedBy, "pendingBy": refs.PendingBy, "historyOf": refs.HistoryOf,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"withdrawn": hash})
+}
+
+func appendUnique(xs []string, s string) []string {
+	for _, x := range xs {
+		if x == s {
+			return xs
+		}
+	}
+	return append(xs, s)
 }
 
 func (h *Handler) getStory(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +364,11 @@ func (h *Handler) previewMigration(w http.ResponseWriter, r *http.Request) {
 }
 
 type migrationRequest struct {
-	Action string `json:"action"` // adopt | defer
+	Action string `json:"action"` // adopt | defer | cancel
+	// Phase is begin (record the decision but keep old rules until resume),
+	// complete (finish a begun adoption) or complete-and-commit (default:
+	// begin + complete in one request).
+	Phase string `json:"phase,omitempty"`
 }
 
 // decideMigration records the author's per-save decision about a revised
@@ -249,7 +391,21 @@ func (h *Handler) decideMigration(w http.ResponseWriter, r *http.Request) {
 	var impact *story.MigrationImpact
 	switch req.Action {
 	case "adopt":
-		impact, err = h.catalog.AdoptMigration(inst)
+		switch req.Phase {
+		case "", "complete-and-commit":
+			impact, err = h.catalog.AdoptMigration(inst)
+		case "begin":
+			impact, err = h.catalog.BeginAdoption(inst)
+		case "complete":
+			var applied bool
+			impact, applied, err = h.catalog.CompleteAdoption(inst)
+			if err == nil && impact != nil && impact.AlreadyAdopted {
+				_ = applied
+			}
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "phase must be begin, complete or complete-and-commit"})
+			return
+		}
 		if err != nil {
 			writeError(w, err)
 			return
@@ -260,8 +416,14 @@ func (h *Handler) decideMigration(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		impact, _ = h.catalog.PreviewMigration(inst)
+	case "cancel":
+		if err := h.catalog.CancelAdoption(inst); err != nil {
+			writeError(w, err)
+			return
+		}
+		impact, _ = h.catalog.PreviewMigration(inst)
 	default:
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action must be adopt or defer"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action must be adopt, complete, defer or cancel"})
 		return
 	}
 	if err := h.store.Save(inst); err != nil {
