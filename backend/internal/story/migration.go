@@ -50,9 +50,10 @@ type MigrationImpact struct {
 	CurrentNodeMissing bool           `json:"currentNodeMissing"`
 	Completed          []EventImpact  `json:"completed"`
 	Future             []ChoiceImpact `json:"future"`
-	// Pending is true when a durable "adoption in progress" decision was
-	// saved but never completed (e.g. the process exited mid-adoption). The
-	// save is still playing under FromHash rules until completion resumes.
+	// Pending is true when a durable adoption decision was saved but never
+	// completed (e.g. the process exited mid-adoption). The save remains
+	// presented under FromHash rules, but cannot advance until completion
+	// resumes or the decision is explicitly cancelled.
 	Pending bool `json:"pending,omitempty"`
 	// AlreadyAdopted is true when a repeated completion arrives after the
 	// adoption already finished; no rewards or story position change again.
@@ -105,6 +106,12 @@ func (c *Catalog) PreviewMigration(inst *Instance) (*MigrationImpact, error) {
 	latest, err := c.Get(inst.StoryID)
 	if err != nil {
 		return nil, err
+	}
+	if inst.PendingMigration != nil {
+		latest, err = c.DefinitionForHash(inst.PendingMigration.ToHash)
+		if err != nil {
+			return nil, err
+		}
 	}
 	toHash, err := DefHash(latest)
 	if err != nil {
@@ -185,12 +192,16 @@ func (c *Catalog) PreviewMigration(inst *Instance) (*MigrationImpact, error) {
 // BeginAdoption reviews the revision and durably records the decision to
 // adopt it without touching the pin, rewards, facts or position. The caller
 // must persist the instance afterwards. A crash after begin leaves a
-// resumable "waiting for recovery" save that still plays under the old
-// rules. Begin refuses revisions that would strand the current node.
+// resumable waiting-for-recovery save that keeps showing the old-rule view
+// but refuses story progression. Begin refuses revisions that would strand
+// the current node.
 func (c *Catalog) BeginAdoption(inst *Instance) (*MigrationImpact, error) {
 	impact, err := c.PreviewMigration(inst)
 	if err != nil {
 		return nil, err
+	}
+	if inst.PendingMigration != nil {
+		return impact, nil
 	}
 	if impact.UpToDate {
 		return impact, nil
@@ -323,6 +334,9 @@ func (c *Catalog) AdoptMigration(inst *Instance) (*MigrationImpact, error) {
 // DeferMigration records that the author of this save declined the latest
 // revision for now. It never alters happened events and is idempotent.
 func (c *Catalog) DeferMigration(inst *Instance) error {
+	if inst.PendingMigration != nil {
+		return ErrMigrationPending
+	}
 	hash, err := c.LatestHash(inst.StoryID)
 	if err != nil {
 		return err

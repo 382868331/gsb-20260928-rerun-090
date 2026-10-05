@@ -67,9 +67,9 @@ func TestAdoptionPersistsAcrossCatalogRestart(t *testing.T) {
 }
 
 // TestInterruptedAdoptionResumesExactlyOnce covers the begin/complete
-// sequence: after begin the save still plays old rules and is marked
-// pending; after restart the pending decision is found; repeating the
-// completion neither re-appends the boundary log nor replays rewards.
+// sequence: after begin the save displays old rules but cannot advance;
+// after restart the pending decision is found; repeating the completion
+// neither re-appends the boundary log nor replays rewards.
 func TestInterruptedAdoptionResumesExactlyOnce(t *testing.T) {
 	revs := NewMemoryRevisionStore()
 	c := NewCatalogWithStore(revs, testStory())
@@ -85,17 +85,20 @@ func TestInterruptedAdoptionResumesExactlyOnce(t *testing.T) {
 	if !impact.Pending || inst.PendingMigration == nil {
 		t.Fatal("begin must record a durable pending decision")
 	}
-	// After begin the save is still on the old rules and position.
+	// After begin the save still displays the old rules and position, but
+	// cannot advance until recovery is explicitly completed or cancelled.
 	if inst.DefHash != impact.FromHash || inst.Version != "v1" {
 		t.Fatalf("begin must not re-pin: %s %s", inst.DefHash, inst.Version)
 	}
-	if _, err := c.Apply(inst, "pay", "before-complete"); err != nil {
-		t.Fatalf("pending save keeps playing under old rules: %v", err)
-	}
-	if inst.Facts["paid"] != true {
-		t.Fatal("old-rule play during pending state must grant normally")
-	}
+	goldBefore := inst.Facts["gold"]
+	currentBefore := inst.Current
 	rewardsBefore := len(inst.Rewards)
+	if _, err := c.Apply(inst, "pay", "before-complete"); !errors.Is(err, ErrMigrationPending) {
+		t.Fatalf("pending save must block story progression, got %v", err)
+	}
+	if inst.Facts["gold"] != goldBefore || inst.Current != currentBefore || len(inst.Rewards) != rewardsBefore {
+		t.Fatalf("blocked choice changed state: facts=%v current=%s rewards=%d", inst.Facts, inst.Current, len(inst.Rewards))
+	}
 
 	// Restart with the decision persisted on the instance.
 	c2 := NewCatalogWithStore(revs)

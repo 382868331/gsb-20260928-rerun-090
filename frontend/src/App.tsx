@@ -331,7 +331,12 @@ export function App() {
             <div className="empty">点击“开始新故事”进入《雾港抉择》。</div>
           ) : (
             <>
-              <NodePanel view={view} busy={busy} onChoose={handleChoose} />
+              <NodePanel
+                view={view}
+                busy={busy}
+                locked={Boolean(instance.pendingMigration)}
+                onChoose={handleChoose}
+              />
               <div className="panels">
                 <FactsPanel instance={instance} />
                 <RewardLog instance={instance} />

@@ -94,11 +94,17 @@ func TestAdoptionSurvivesRestartAndRepeatedResume(t *testing.T) {
 	if code, body := req(h, "POST", "/api/instances", `{"id":"b"}`); code != http.StatusCreated {
 		t.Fatalf("create b: %d %s", code, body)
 	}
+	if code, body := req(h, "POST", "/api/instances", `{"id":"c"}`); code != http.StatusCreated {
+		t.Fatalf("create c: %d %s", code, body)
+	}
 	if code, body := req(h, "POST", "/api/instances/a/choices", `{"choiceId":"chop_wood","idempotencyKey":"a1"}`); code != http.StatusOK {
 		t.Fatalf("a chop: %d %s", code, body)
 	}
 	if code, body := req(h, "POST", "/api/instances/b/choices", `{"choiceId":"chop_wood","idempotencyKey":"b1"}`); code != http.StatusOK {
 		t.Fatalf("b chop: %d %s", code, body)
+	}
+	if code, body := req(h, "POST", "/api/instances/c/choices", `{"choiceId":"chop_wood","idempotencyKey":"c1"}`); code != http.StatusOK {
+		t.Fatalf("c chop: %d %s", code, body)
 	}
 	if code, body := req(h, "PUT", "/api/stories/mist-harbor", reviseSeedV2(t)); code != http.StatusOK {
 		t.Fatalf("publish v2: %d %s", code, body)
@@ -111,6 +117,9 @@ func TestAdoptionSurvivesRestartAndRepeatedResume(t *testing.T) {
 	// Branch b defers and keeps v1.
 	if code, body := req(h, "POST", "/api/instances/b/migration", `{"action":"defer"}`); code != http.StatusOK {
 		t.Fatalf("defer: %d %s", code, body)
+	}
+	if code, body := req(h, "POST", "/api/instances/c/migration", `{"action":"adopt","phase":"begin"}`); code != http.StatusOK {
+		t.Fatalf("c begin: %d %s", code, body)
 	}
 
 	// Restart: a new catalog rebuilt from persisted revision snapshots.
@@ -126,6 +135,39 @@ func TestAdoptionSurvivesRestartAndRepeatedResume(t *testing.T) {
 	}
 	if !strings.Contains(body, "2026-10-02.v2") {
 		t.Fatalf("pending decision (target version) must be visible: %s", body)
+	}
+	// The old node and facts remain readable, but delivery cannot advance or
+	// grant anything while the durable adoption decision is awaiting recovery.
+	code, body = req(h2, "POST", "/api/instances/a/choices", `{"choiceId":"deliver_wood","idempotencyKey":"a-blocked"}`)
+	if code != http.StatusConflict || !strings.Contains(body, "migration recovery is pending") {
+		t.Fatalf("choice during pending recovery must be blocked: %d %s", code, body)
+	}
+	code, body = req(h2, "GET", "/api/instances/a", "")
+	if !strings.Contains(body, `"current":"lumberyard"`) || !strings.Contains(body, `"gold":5`) || !strings.Contains(body, `"version":"2026-09-30.v1"`) {
+		t.Fatalf("blocked choice changed pending save: %s", body)
+	}
+	code, body = req(h2, "POST", "/api/instances/a/migration", `{"action":"defer"}`)
+	if code != http.StatusConflict || !strings.Contains(body, "migration recovery is pending") {
+		t.Fatalf("pending decision must not be silently deferred: %d %s", code, body)
+	}
+	code, body = req(h2, "GET", "/api/instances/a", "")
+	if !strings.Contains(body, `"migrationStatus":"pending"`) || !strings.Contains(body, `"pendingMigration":{`) {
+		t.Fatalf("blocked defer must preserve pending recovery: %s", body)
+	}
+	// A retry of a choice completed before the adoption decision is a read-only
+	// duplicate replay; it must remain idempotent without advancing the story.
+	code, body = req(h2, "POST", "/api/instances/a/choices", `{"choiceId":"chop_wood","idempotencyKey":"a1"}`)
+	if code != http.StatusOK || !strings.Contains(body, `"duplicate":true`) || !strings.Contains(body, `"current":"lumberyard"`) {
+		t.Fatalf("pre-pending idempotent retry should replay without changes: %d %s", code, body)
+	}
+	// Repeating the already-recorded decision must not complete adoption or
+	// append an adoption record.
+	code, body = req(h2, "POST", "/api/instances/a/migration", `{"action":"adopt","phase":"begin"}`)
+	if code != http.StatusOK || !strings.Contains(body, `"version":"2026-09-30.v1"`) || strings.Count(body, "规则迁移") != 0 {
+		t.Fatalf("repeated begin must preserve the pending boundary: %d %s", code, body)
+	}
+	if !strings.Contains(body, `"pendingMigration":{`) {
+		t.Fatalf("repeated begin must retain pending marker: %s", body)
 	}
 	code, body = req(h2, "GET", "/api/instances/b", "")
 	if code != http.StatusOK {
@@ -174,6 +216,25 @@ func TestAdoptionSurvivesRestartAndRepeatedResume(t *testing.T) {
 	code, body = req(h2, "POST", "/api/instances/b/choices", `{"choiceId":"deliver_wood","idempotencyKey":"b2"}`)
 	if code != http.StatusOK || !strings.Contains(body, `"gold":13`) {
 		t.Fatalf("b continues v1: %d %s", code, body)
+	}
+
+	// Branch c explicitly cancels recovery, plays under the old rules, then
+	// starts and completes a fresh adoption at the new story position.
+	code, body = req(h2, "POST", "/api/instances/c/migration", `{"action":"cancel"}`)
+	if code != http.StatusOK || strings.Contains(body, `"pendingMigration":{`) {
+		t.Fatalf("cancel must clear the pending decision: %d %s", code, body)
+	}
+	code, body = req(h2, "POST", "/api/instances/c/choices", `{"choiceId":"deliver_wood","idempotencyKey":"c2"}`)
+	if code != http.StatusOK || !strings.Contains(body, `"current":"square"`) || !strings.Contains(body, `"gold":13`) {
+		t.Fatalf("cancelled branch must continue old rules: %d %s", code, body)
+	}
+	code, body = req(h2, "POST", "/api/instances/c/migration", `{"action":"adopt","phase":"complete-and-commit"}`)
+	if code != http.StatusOK || !strings.Contains(body, `"version":"2026-10-02.v2"`) {
+		t.Fatalf("c must be able to adopt after cancellation: %d %s", code, body)
+	}
+	code, body = req(h2, "POST", "/api/instances/c/choices", `{"choiceId":"chop_wood","idempotencyKey":"c3"}`)
+	if code != http.StatusOK || !strings.Contains(body, `"gold":20`) {
+		t.Fatalf("re-adopted branch must follow v2 rewards: %d %s", code, body)
 	}
 	// Both earned the v1-era +5 then +8; the versions diverge on the next
 	// chop: adopted a gets the revised +7, deferred b keeps the old +5.

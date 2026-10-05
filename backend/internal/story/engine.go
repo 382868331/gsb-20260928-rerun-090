@@ -25,6 +25,7 @@ var (
 	ErrBadEffect         = fmt.Errorf("invalid effect")
 	ErrEndNode           = fmt.Errorf("story has ended")
 	ErrMigrationBlocked  = fmt.Errorf("migration blocked: progress would be lost")
+	ErrMigrationPending  = fmt.Errorf("migration recovery is pending: complete or cancel it before continuing the story")
 )
 
 // claimSep separates visit id and choice in a claim key.
@@ -379,7 +380,6 @@ func (c *Catalog) Apply(inst *Instance, choiceID, idemKey string) (*AppliedChoic
 	if err != nil {
 		return nil, err
 	}
-
 	// A retried request carrying an idempotency key replays the original
 	// outcome even if play has since moved to another node.
 	if idemKey != "" {
@@ -393,6 +393,9 @@ func (c *Catalog) Apply(inst *Instance, choiceID, idemKey string) (*AppliedChoic
 				View: view, Duplicate: true,
 			}, nil
 		}
+	}
+	if inst.PendingMigration != nil {
+		return nil, ErrMigrationPending
 	}
 	node, ok := d.Nodes[inst.Current]
 	if !ok {

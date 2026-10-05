@@ -3,10 +3,11 @@ import type { NodeView } from "../types";
 interface Props {
   view: NodeView | null;
   busy: boolean;
+  locked?: boolean;
   onChoose: (choiceId: string) => void;
 }
 
-export function NodePanel({ view, busy, onChoose }: Props) {
+export function NodePanel({ view, busy, locked = false, onChoose }: Props) {
   if (!view) return null;
   const { node } = view;
   const ended = node.type === "end";
@@ -20,6 +21,7 @@ export function NodePanel({ view, busy, onChoose }: Props) {
       <p className="node-text">{node.text}</p>
       {!ended && (
         <div className="choices">
+          {locked && <div className="no-choice">等待规则采用恢复完成或取消，剧情暂不能推进。</div>}
           {view.availableChoices.length === 0 && (
             <div className="no-choice">当前没有满足条件的选项。</div>
           )}
@@ -27,7 +29,8 @@ export function NodePanel({ view, busy, onChoose }: Props) {
             <button
               key={choice.id}
               className="choice"
-              disabled={busy}
+              disabled={busy || locked}
+              aria-disabled={locked || undefined}
               onClick={() => onChoose(choice.id)}
               data-choice-id={choice.id}
             >

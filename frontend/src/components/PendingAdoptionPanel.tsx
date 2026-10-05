@@ -9,10 +9,11 @@ interface Props {
 }
 
 // PendingAdoptionPanel is shown after an interrupted adoption (including a
-// restart). The save is still running under the old rules; this panel first
-// lays out the current facts and the recorded decision, and only then lets
-// the user finish. Resuming is idempotent server-side, so a repeated click
-// or retried request can never re-grant rewards or advance the story twice.
+// restart). The save is still presented under the old rules; this panel
+// lays out the current facts and the recorded decision, and story choices
+// stay locked until the user finishes or cancels recovery. Resuming is
+// idempotent server-side, so a repeated click or retried request can never
+// re-grant rewards or advance the story twice.
 export function PendingAdoptionPanel({ pending, instance, busy, onResume, onCancel }: Props) {
   return (
     <section className="card migration" data-testid="pending-adoption-panel">

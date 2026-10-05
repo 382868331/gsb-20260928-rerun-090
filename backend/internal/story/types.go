@@ -71,9 +71,9 @@ type Instance struct {
 	MigrationHistory []MigrationRecord `json:"migrationHistory,omitempty"`
 	// PendingMigration is a durable "adoption in progress" marker. The
 	// decision (from -> to) is saved before the re-pin is completed, so a
-	// crash or restart leaves the save in a resumable state: play continues
-	// under the old rules until completion, and resuming never replays
-	// rewards or advances story position.
+	// crash or restart leaves the save in a resumable state: facts and the
+	// old-rule view remain visible, story progression is blocked, and
+	// resuming never replays rewards or advances story position.
 	PendingMigration *PendingAdoption `json:"pendingMigration,omitempty"`
 	CreatedAt        string           `json:"createdAt"`
 	UpdatedAt        string           `json:"updatedAt"`

@@ -116,6 +116,8 @@ func writeError(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	case errors.Is(err, story.ErrMigrationBlocked):
 		status = http.StatusConflict
+	case errors.Is(err, story.ErrMigrationPending):
+		status = http.StatusConflict
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
@@ -438,10 +440,14 @@ func (h *Handler) decideMigration(w http.ResponseWriter, r *http.Request) {
 	resp := instanceResponse{Instance: inst, View: view}
 	h.decorate(&resp, inst)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"migration":    impact,
-		"instance":     resp.Instance,
-		"view":         resp.View,
-		"versionDrift": resp.VersionDrift,
+		"migration":        impact,
+		"instance":         resp.Instance,
+		"view":             resp.View,
+		"versionDrift":     resp.VersionDrift,
+		"latestVersion":    resp.LatestVersion,
+		"latestDefHash":    resp.LatestDefHash,
+		"migrationStatus":  resp.MigrationStatus,
+		"pendingMigration": resp.Pending,
 	})
 }
 
