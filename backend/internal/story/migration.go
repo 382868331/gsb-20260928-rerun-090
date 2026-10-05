@@ -192,6 +192,17 @@ func (c *Catalog) BeginAdoption(inst *Instance) (*MigrationImpact, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A retried begin (client believed the first request failed) must not
+	// rewrite the recorded decision or its timestamp. A pending decision for
+	// a different revision must be completed or cancelled first.
+	if inst.PendingMigration != nil {
+		if inst.PendingMigration.ToHash != impact.ToHash {
+			return impact, fmt.Errorf("%w: an adoption decision %s -> %s is already waiting for recovery; complete or cancel it before adopting another revision",
+				ErrMigrationBlocked, inst.PendingMigration.FromVersion, inst.PendingMigration.ToVersion)
+		}
+		impact.Pending = true
+		return impact, nil
+	}
 	if impact.UpToDate {
 		return impact, nil
 	}
@@ -323,6 +334,10 @@ func (c *Catalog) AdoptMigration(inst *Instance) (*MigrationImpact, error) {
 // DeferMigration records that the author of this save declined the latest
 // revision for now. It never alters happened events and is idempotent.
 func (c *Catalog) DeferMigration(inst *Instance) error {
+	if inst.PendingMigration != nil {
+		return fmt.Errorf("%w: an adoption decision %s -> %s waits for recovery; complete or cancel it before declining",
+			ErrMigrationBlocked, inst.PendingMigration.FromVersion, inst.PendingMigration.ToVersion)
+	}
 	hash, err := c.LatestHash(inst.StoryID)
 	if err != nil {
 		return err

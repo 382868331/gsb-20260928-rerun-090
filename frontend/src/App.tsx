@@ -260,7 +260,7 @@ export function App() {
           <button onClick={handleStart} disabled={busy}>
             开始新故事
           </button>
-          <button onClick={handleFork} disabled={busy || !instance} title="在本次选择之前建立独立试演分支">
+          <button onClick={handleFork} disabled={busy || !instance || !!instance.pendingMigration} title="在本次选择之前建立独立试演分支">
             建立试演分支
           </button>
           <button
@@ -331,7 +331,12 @@ export function App() {
             <div className="empty">点击“开始新故事”进入《雾港抉择》。</div>
           ) : (
             <>
-              <NodePanel view={view} busy={busy} onChoose={handleChoose} />
+              <NodePanel
+                view={view}
+                busy={busy}
+                locked={!!instance.pendingMigration}
+                onChoose={handleChoose}
+              />
               <div className="panels">
                 <FactsPanel instance={instance} />
                 <RewardLog instance={instance} />

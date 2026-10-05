@@ -116,6 +116,8 @@ func writeError(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	case errors.Is(err, story.ErrMigrationBlocked):
 		status = http.StatusConflict
+	case errors.Is(err, story.ErrAdoptionPending):
+		status = http.StatusConflict
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }

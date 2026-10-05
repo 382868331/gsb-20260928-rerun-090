@@ -67,8 +67,8 @@ func TestAdoptionPersistsAcrossCatalogRestart(t *testing.T) {
 }
 
 // TestInterruptedAdoptionResumesExactlyOnce covers the begin/complete
-// sequence: after begin the save still plays old rules and is marked
-// pending; after restart the pending decision is found; repeating the
+// sequence: after begin the save is marked pending and story progression is
+// blocked; after restart the pending decision is found; repeating the
 // completion neither re-appends the boundary log nor replays rewards.
 func TestInterruptedAdoptionResumesExactlyOnce(t *testing.T) {
 	revs := NewMemoryRevisionStore()
@@ -89,11 +89,19 @@ func TestInterruptedAdoptionResumesExactlyOnce(t *testing.T) {
 	if inst.DefHash != impact.FromHash || inst.Version != "v1" {
 		t.Fatalf("begin must not re-pin: %s %s", inst.DefHash, inst.Version)
 	}
-	if _, err := c.Apply(inst, "pay", "before-complete"); err != nil {
-		t.Fatalf("pending save keeps playing under old rules: %v", err)
+	goldBefore := inst.Facts["gold"]
+	if _, err := c.Apply(inst, "pay", "before-complete"); !errors.Is(err, ErrAdoptionPending) {
+		t.Fatalf("pending save must reject new choices, got %v", err)
 	}
-	if inst.Facts["paid"] != true {
-		t.Fatal("old-rule play during pending state must grant normally")
+	if inst.Facts["gold"] != goldBefore || inst.Facts["paid"] == true {
+		t.Fatal("rejected choice during pending must not change facts or grant rewards")
+	}
+	if inst.Current != "gate" || len(inst.Rewards) != 1 {
+		t.Fatalf("rejected choice must not advance the story: current=%s rewards=%d", inst.Current, len(inst.Rewards))
+	}
+	// Deferring while a decision waits is refused as well.
+	if err := c.DeferMigration(inst); !errors.Is(err, ErrMigrationBlocked) {
+		t.Fatalf("defer during pending must be blocked, got %v", err)
 	}
 	rewardsBefore := len(inst.Rewards)
 

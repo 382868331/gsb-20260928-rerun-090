@@ -25,6 +25,7 @@ var (
 	ErrBadEffect         = fmt.Errorf("invalid effect")
 	ErrEndNode           = fmt.Errorf("story has ended")
 	ErrMigrationBlocked  = fmt.Errorf("migration blocked: progress would be lost")
+	ErrAdoptionPending   = fmt.Errorf("adoption recovery is pending: complete or cancel it before continuing the story")
 )
 
 // claimSep separates visit id and choice in a claim key.
@@ -380,6 +381,13 @@ func (c *Catalog) Apply(inst *Instance, choiceID, idemKey string) (*AppliedChoic
 		return nil, err
 	}
 
+	// While a durable adoption decision waits for recovery the save is in a
+	// locked boundary state: happened facts/rewards and the pending decision
+	// are shown, but no new story progression is accepted until the adoption
+	// is explicitly completed or cancelled. Only idempotent replays (below)
+	// are allowed through, since they change nothing.
+	pendingAdoption := inst.PendingMigration != nil
+
 	// A retried request carrying an idempotency key replays the original
 	// outcome even if play has since moved to another node.
 	if idemKey != "" {
@@ -390,9 +398,14 @@ func (c *Catalog) Apply(inst *Instance, choiceID, idemKey string) (*AppliedChoic
 			}
 			return &AppliedChoice{
 				ChoiceID: rec.ChoiceID, Node: rec.FromNode, Rewards: rec.Rewards,
-				View: view, Duplicate: true,
+			View: view, Duplicate: true,
 			}, nil
 		}
+	}
+	if pendingAdoption {
+		return nil, fmt.Errorf("%w: instance %s waits for adoption %s -> %s",
+			ErrAdoptionPending, inst.ID,
+			inst.PendingMigration.FromVersion, inst.PendingMigration.ToVersion)
 	}
 	node, ok := d.Nodes[inst.Current]
 	if !ok {

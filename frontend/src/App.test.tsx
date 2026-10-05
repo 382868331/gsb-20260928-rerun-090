@@ -510,6 +510,9 @@ describe("resilience and rule revision review", () => {
     expect(screen.getByTestId("pending-decision").textContent).toContain("v2");
     // The branch list distinguishes the waiting-to-resume branch.
     expect(screen.getAllByText(/等待恢复采用/).length).toBeGreaterThan(0);
+    // Story progression is locked until the adoption is completed or cancelled.
+    await waitFor(() => expect(screen.getByTestId("choices-locked")).toBeTruthy());
+    expect(screen.queryAllByRole("button", { name: /选择|去|交付/ }).filter((b) => (b as HTMLButtonElement).className === "choice")).toEqual([]);
 
     fireEvent.click(screen.getByTestId("resume-adoption"));
     await waitFor(() => expect(screen.getByText(/已完成采用/)).toBeTruthy());
